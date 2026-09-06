@@ -1,352 +1,69 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense, lazy } from 'react';
+import {
+  Flame, Trophy, Zap, Target, Calendar, Volume2, VolumeX, Sun, Moon,
+  BarChart3, Download, Upload, Plus, Minus, Check, ChevronLeft, ChevronRight,
+  Sliders, Sparkles, RefreshCw, Layers
+} from 'lucide-react';
 
-const CATEGORIES = [
-  { id: 'kanji', label: 'Kanji', color: '#FF4B1F', num: '01' },
-  { id: 'bunpou', label: 'Bunpou', color: '#0047AB', num: '02' },
-  { id: 'vocab', label: 'Vocab', color: '#1A8A3E', num: '03' },
-  { id: 'listening', label: 'Listening', color: '#B8860B', num: '04' },
-];
+import {
+  CATEGORIES, todayISO, daysAgoISO, formatDateIndo, computeScore,
+  computeStreak, computeMomentum, getMasteryTier
+} from './utils/algorithm.js';
 
-const STORAGE_KEY = 'entries';
+import {
+  loadInitialData, createDebouncedSaver, saveTargets, saveTheme,
+  saveSoundSetting, exportJSON, exportCSV, isValidEntriesShape, getStorageStats
+} from './utils/storage.js';
 
-function todayISO() {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
-}
+import { playClickSound, playGoalChime, playFanfare, triggerHaptic } from './utils/feedback.js';
+import { animatePress, createCelebrationBurst } from './utils/motion.js';
 
-function daysAgoISO(n) {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
-}
+import { AppSkeleton, HeatmapSkeleton, StatisticsSkeleton } from './components/SkeletonLoader.jsx';
+import StatCounter from './components/StatCounter.jsx';
 
-function computeScore(entry) {
-  if (!entry) return 0;
-  const cats = CATEGORIES.filter(c => entry[c.id] && entry[c.id] > 0);
-  const volume = CATEGORIES.reduce((sum, c) => sum + (entry[c.id] || 0), 0);
-  const variety = cats.length; // 0-4
-  const varietyMult = 1 + variety * 0.25; // full 4/4 = x2
-  const volumeScore = Math.min(volume, 200) * 0.5 + Math.max(0, volume - 200) * 0.1;
-  return Math.round(volumeScore * varietyMult);
-}
-
-function computeStreak(entriesMap) {
-  let streak = 0;
-  let cursor = todayISO();
-  if (!entriesMap[cursor] || computeScore(entriesMap[cursor]) === 0) {
-    cursor = daysAgoISO(1);
-  }
-  while (entriesMap[cursor] && computeScore(entriesMap[cursor]) > 0) {
-    streak++;
-    const d = new Date(cursor);
-    d.setDate(d.getDate() - 1);
-    cursor = d.toISOString().slice(0, 10);
-  }
-  return streak;
-}
-
-// Storage adapter: Offline-first with localStorage and Claude window.storage support
-const storageAdapter = {
-  async get(key) {
-    if (typeof window !== 'undefined' && window.storage) {
-      try {
-        const res = await window.storage.get(key, false);
-        if (res && res.value) return res;
-      } catch (e) {
-        // Fallback to localStorage
-      }
-    }
-    if (typeof localStorage !== 'undefined') {
-      const val = localStorage.getItem(key);
-      return val ? { value: val } : null;
-    }
-    return null;
-  },
-  async set(key, value) {
-    let ok = false;
-    if (typeof localStorage !== 'undefined') {
-      try {
-        localStorage.setItem(key, value);
-        ok = true;
-      } catch (e) {
-        console.warn('localStorage save failed', e);
-      }
-    }
-    if (typeof window !== 'undefined' && window.storage) {
-      try {
-        await window.storage.set(key, value, false);
-        ok = true;
-      } catch (e) {}
-    }
-    return ok;
-  },
-};
-
-function useStorage() {
-  const [entries, setEntries] = useState({});
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState(null);
-  const saveTimer = useRef(null);
-  const pendingRef = useRef(null);
-  const inFlightRef = useRef(false);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await storageAdapter.get(STORAGE_KEY);
-        if (res && res.value) {
-          setEntries(JSON.parse(res.value));
-        }
-      } catch (e) {
-        console.warn('Error reading storage', e);
-      } finally {
-        setLoaded(true);
-      }
-    })();
-  }, []);
-
-  const flush = useCallback(async () => {
-    if (inFlightRef.current || pendingRef.current === null) return;
-    const toSave = pendingRef.current;
-    pendingRef.current = null;
-    inFlightRef.current = true;
-    try {
-      const ok = await storageAdapter.set(STORAGE_KEY, JSON.stringify(toSave));
-      if (!ok) setError('Gagal nyimpen data — cek izin storage browser.');
-      else setError(null);
-    } catch (e) {
-      setError('Gagal nyimpen — coba lagi.');
-    } finally {
-      inFlightRef.current = false;
-      if (pendingRef.current !== null) flush();
-    }
-  }, []);
-
-  const persist = useCallback((next) => {
-    setEntries(next);
-    pendingRef.current = next;
-    if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(flush, 300);
-  }, [flush]);
-
-  return { entries, persist, loaded, error };
-}
-
-function HeatCell({ date, score, isToday, isSelected, onClick }) {
-  let bg = '#E8E4D8';
-  let border = '2px solid #1A1A1A';
-  if (score > 0) {
-    if (score < 20) bg = '#D8D2BE';
-    else if (score < 50) bg = '#F5C99E';
-    else if (score < 90) bg = '#FF8F5A';
-    else bg = '#FF4B1F';
-  }
-  
-  if (isSelected) {
-    border = '2.5px solid #0047AB';
-  } else if (isToday) {
-    border = '2.5px solid #1A8A3E';
-  }
-
-  return (
-    <div
-      onClick={onClick}
-      title={`${date}: ${score} poin`}
-      style={{
-        width: '18px',
-        height: '18px',
-        background: bg,
-        border: border,
-        cursor: 'pointer',
-        position: 'relative',
-        transition: 'transform 0.08s ease',
-        boxSizing: 'border-box',
-        borderRadius: '2px',
-      }}
-      onMouseEnter={(e) => (e.currentTarget.style.transform = 'scale(1.15)')}
-      onMouseLeave={(e) => (e.currentTarget.style.transform = 'scale(1)')}
-    />
-  );
-}
-
-function Heatmap({ entries, onSelectDate, selectedDate }) {
-  const days = useMemo(() => {
-    const arr = [];
-    for (let i = 111; i >= 0; i--) {
-      const date = daysAgoISO(i);
-      arr.push({ date, score: computeScore(entries[date]) });
-    }
-    return arr;
-  }, [entries]);
-
-  const weeks = [];
-  for (let i = 0; i < days.length; i += 7) {
-    weeks.push(days.slice(i, i + 7));
-  }
-
-  return (
-    <div>
-      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: '8px' }}>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${weeks.length}, 18px)`,
-            gap: '4px',
-            width: 'max-content',
-            padding: '2px',
-          }}
-        >
-          {weeks.map((week, wi) => (
-            <div key={wi} style={{ display: 'grid', gridTemplateRows: 'repeat(7, 18px)', gap: '4px' }}>
-              {week.map((d) => (
-                <HeatCell
-                  key={d.date}
-                  date={d.date}
-                  score={d.score}
-                  isToday={d.date === todayISO()}
-                  isSelected={d.date === selectedDate}
-                  onClick={() => onSelectDate(d.date)}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '10px', fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: '#1A1A1A' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span>SEPI</span>
-          {['#E8E4D8', '#D8D2BE', '#F5C99E', '#FF8F5A', '#FF4B1F'].map((c) => (
-            <div key={c} style={{ width: 14, height: 14, background: c, border: '1.5px solid #1A1A1A', borderRadius: '1px' }} />
-          ))}
-          <span>GACOR</span>
-        </div>
-        <div style={{ fontSize: '10px', color: '#6B6658' }}>
-          ■ Hijau: Hari ini | ■ Biru: Dipilih
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function CategoryRow({ cat, value, onChange }) {
-  const [local, setLocal] = useState(value || 0);
-  useEffect(() => setLocal(value || 0), [value]);
-
-  const commit = (v) => {
-    const n = Math.max(0, parseInt(v, 10) || 0);
-    setLocal(n);
-    onChange(cat.id, n);
-  };
-
-  return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: '40px 1fr 140px',
-        alignItems: 'center',
-        borderBottom: '2px solid #1A1A1A',
-        padding: '12px 0',
-        gap: '10px',
-      }}
-    >
-      <div
-        style={{
-          fontFamily: "'IBM Plex Mono', monospace",
-          fontSize: '13px',
-          color: '#fff',
-          background: cat.color,
-          width: 36,
-          height: 36,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontWeight: 700,
-          borderRadius: '2px',
-        }}
-      >
-        {cat.num}
-      </div>
-      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 600, color: '#1A1A1A' }}>
-        {cat.label}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', border: '2px solid #1A1A1A', background: '#fff', height: 44 }}>
-        <button
-          onClick={() => commit(local - 5)}
-          style={btnStyle}
-          aria-label={`Kurang 5 ${cat.label}`}
-        >
-          −
-        </button>
-        <input
-          type="number"
-          value={local}
-          onChange={(e) => setLocal(e.target.value)}
-          onBlur={(e) => commit(e.target.value)}
-          style={{
-            width: 48,
-            height: '100%',
-            textAlign: 'center',
-            border: 'none',
-            outline: 'none',
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontSize: '16px',
-            fontWeight: 700,
-            background: 'transparent',
-            padding: 0,
-          }}
-        />
-        <button
-          onClick={() => commit(local + 5)}
-          style={btnStyle}
-          aria-label={`Tambah 5 ${cat.label}`}
-        >
-          +
-        </button>
-      </div>
-    </div>
-  );
-}
-
-const btnStyle = {
-  width: 44,
-  height: 44,
-  border: 'none',
-  background: '#E8E4D8',
-  cursor: 'pointer',
-  fontFamily: "'Space Grotesk', sans-serif",
-  fontWeight: 700,
-  fontSize: '20px',
-  color: '#1A1A1A',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  userSelect: 'none',
-  WebkitTapHighlightColor: 'transparent',
-};
-
-function StatStamp({ label, value, color }) {
-  return (
-    <div style={{ border: `3px solid ${color || '#1A1A1A'}`, padding: '10px 14px', position: 'relative', background: '#FDFCFA' }}>
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', letterSpacing: '0.05em', color: '#6B6658', marginBottom: '4px' }}>
-        {label}
-      </div>
-      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 800, lineHeight: 1, color: color || '#1A1A1A' }}>
-        {value}
-      </div>
-    </div>
-  );
-}
+// Lazy-loaded visual modules for performance
+const Heatmap = lazy(() => import('./components/Heatmap.jsx'));
+const Statistics = lazy(() => import('./components/Statistics.jsx'));
 
 export default function App() {
-  const { entries, persist, loaded, error } = useStorage();
+  const [loaded, setLoaded] = useState(false);
+  const [entries, setEntries] = useState({});
+  const [targets, setTargets] = useState({ kanji: 15, bunpou: 10, vocab: 30, listening: 25 });
+  const [theme, setTheme] = useState('light');
+  const [soundEnabled, setSoundEnabled] = useState(true);
   const [selectedDate, setSelectedDate] = useState(todayISO());
+
+  // UI state
+  const [saveStatus, setSaveStatus] = useState('saved'); // 'saved', 'saving', 'error'
+  const [activeTabMobile, setActiveTabMobile] = useState('habit'); // 'habit' | 'stats'
+  const [showTargetModal, setShowTargetModal] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [isInstalled, setIsInstalled] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+
+  // Initialize Debounced Saver
+  const saveQueueRef = useRef(null);
 
   useEffect(() => {
-    // Check if running as standalone PWA
+    saveQueueRef.current = createDebouncedSaver(
+      () => setSaveStatus('saved'),
+      () => setSaveStatus('error'),
+      () => setSaveStatus('saving')
+    );
+  }, []);
+
+  // Load initial data
+  useEffect(() => {
+    (async () => {
+      const data = await loadInitialData();
+      setEntries(data.entries);
+      setTargets(data.targets);
+      setTheme(data.theme);
+      setSoundEnabled(data.soundEnabled);
+      setLoaded(true);
+    })();
+
     if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
-      setIsInstalled(true);
+      setIsStandalone(true);
     }
 
     const handleBeforeInstall = (e) => {
@@ -358,106 +75,115 @@ export default function App() {
     return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
   }, []);
 
+  // Apply theme to body
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  // Calculations
+  const streak = useMemo(() => computeStreak(entries), [entries]);
+  const todayScore = useMemo(() => computeScore(entries[todayISO()]), [entries]);
+  const bestScore = useMemo(() => {
+    return Object.values(entries).reduce((max, e) => Math.max(max, computeScore(e)), 0);
+  }, [entries]);
+
+  const momentum = useMemo(() => computeMomentum(entries), [entries]);
+  const masteryTier = useMemo(() => getMasteryTier(momentum), [momentum]);
+  const currentEntry = entries[selectedDate] || {};
+
+  // Mutation & Persistence
+  const updateCategory = useCallback((catId, val, btnElem) => {
+    if (btnElem) animatePress(btnElem);
+    playClickSound(soundEnabled);
+    triggerHaptic('tap');
+
+    const nextVal = Math.max(0, parseInt(val, 10) || 0);
+    const prevVal = currentEntry[catId] || 0;
+    const catTarget = targets[catId] || 15;
+
+    // Trigger celebration if crossing target threshold
+    if (prevVal < catTarget && nextVal >= catTarget) {
+      playGoalChime(soundEnabled);
+      triggerHaptic('goal');
+      if (btnElem) {
+        const rect = btnElem.getBoundingClientRect();
+        createCelebrationBurst(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      }
+    }
+
+    const nextEntries = {
+      ...entries,
+      [selectedDate]: {
+        ...entries[selectedDate],
+        [catId]: nextVal,
+      },
+    };
+
+    setEntries(nextEntries);
+    if (saveQueueRef.current) {
+      saveQueueRef.current(nextEntries);
+    }
+  }, [entries, selectedDate, currentEntry, targets, soundEnabled]);
+
+  // Keyboard Shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.key === '1') updateCategory('kanji', (currentEntry.kanji || 0) + 5);
+      else if (e.key === '2') updateCategory('bunpou', (currentEntry.bunpou || 0) + 5);
+      else if (e.key === '3') updateCategory('vocab', (currentEntry.vocab || 0) + 5);
+      else if (e.key === '4') updateCategory('listening', (currentEntry.listening || 0) + 5);
+      else if (e.key.toLowerCase() === 't') setSelectedDate(todayISO());
+      else if (e.key.toLowerCase() === 'd') {
+        const nextT = theme === 'light' ? 'dark' : 'light';
+        setTheme(nextT);
+        saveTheme(nextT);
+      } else if (e.key.toLowerCase() === 'm') {
+        setSoundEnabled((prev) => {
+          saveSoundSetting(!prev);
+          return !prev;
+        });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentEntry, updateCategory, theme]);
+
+  // Date step
+  const stepDate = (offset) => {
+    playClickSound(soundEnabled);
+    triggerHaptic('tap');
+    const [y, m, d] = selectedDate.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    date.setDate(date.getDate() + offset);
+    setSelectedDate(date.toISOString().slice(0, 10));
+  };
+
+  const toggleTheme = () => {
+    playClickSound(soundEnabled);
+    const next = theme === 'light' ? 'dark' : 'light';
+    setTheme(next);
+    saveTheme(next);
+  };
+
+  const toggleSound = () => {
+    const next = !soundEnabled;
+    playClickSound(next);
+    setSoundEnabled(next);
+    saveSoundSetting(next);
+  };
+
   const handleInstallClick = async () => {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
-      setIsInstalled(true);
+      setIsStandalone(true);
       setDeferredPrompt(null);
     }
   };
 
-  const currentEntry = entries[selectedDate] || {};
-
-  const updateCategory = (catId, value) => {
-    const next = {
-      ...entries,
-      [selectedDate]: {
-        ...entries[selectedDate],
-        [catId]: value,
-      },
-    };
-    persist(next);
-  };
-
-  const streak = useMemo(() => computeStreak(entries), [entries]);
-  const todayScore = computeScore(entries[todayISO()]);
-  const bestScore = useMemo(
-    () => Object.values(entries).reduce((max, e) => Math.max(max, computeScore(e)), 0),
-    [entries]
-  );
-
-  const exportJSON = async () => {
-    const dataStr = JSON.stringify(entries, null, 2);
-    const fileName = `tracked-backup-${todayISO()}.json`;
-
-    // Try Web Share API with file if supported on mobile
-    if (navigator.canShare && navigator.canShare({ files: [new File([dataStr], fileName, { type: 'application/json' })] })) {
-      try {
-        const file = new File([dataStr], fileName, { type: 'application/json' });
-        await navigator.share({
-          files: [file],
-          title: 'trac/ked Data Backup',
-          text: 'Backup data habit tracker trac/ked',
-        });
-        return;
-      } catch (err) {
-        if (err.name !== 'AbortError') console.warn('Share error', err);
-      }
-    }
-
-    // Fallback standard download
-    const blob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = fileName;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const exportCSV = () => {
-    const dates = Object.keys(entries).sort();
-    const rows = [
-      ['Date', 'Kanji', 'Bunpou', 'Vocab', 'Listening', 'Score'].join(','),
-    ];
-
-    dates.forEach((date) => {
-      const e = entries[date] || {};
-      const row = [
-        date,
-        e.kanji || 0,
-        e.bunpou || 0,
-        e.vocab || 0,
-        e.listening || 0,
-        computeScore(e),
-      ];
-      rows.push(row.join(','));
-    });
-
-    const csvContent = rows.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `tracked-habits-${todayISO()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const isValidEntriesShape = (obj) => {
-    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
-    return Object.entries(obj).every(([date, val]) => {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-      if (!val || typeof val !== 'object' || Array.isArray(val)) return false;
-      return Object.entries(val).every(
-        ([k, v]) => CATEGORIES.some((c) => c.id === k) && typeof v === 'number'
-      );
-    });
-  };
-
-  const importData = (e) => {
+  const handleImport = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
@@ -465,18 +191,15 @@ export default function App() {
       try {
         const parsed = JSON.parse(ev.target.result);
         if (!isValidEntriesShape(parsed)) {
-          alert('File nggak sesuai format (harus JSON hasil export trac/ked).');
+          alert('File tidak sesuai skema (harus JSON ekspor trac/ked).');
           return;
         }
-        const incomingDays = Object.keys(parsed).length;
-        const willOverwrite = Object.keys(parsed).some((d) => entries[d]);
-        const msg = willOverwrite
-          ? `Ini bakal menimpa data yang udah ada di hari yang sama (${incomingDays} entri di file). Lanjut?`
-          : `Import ${incomingDays} entri baru?`;
-        if (!window.confirm(msg)) return;
-        persist({ ...entries, ...parsed });
+        if (!window.confirm(`Impor ${Object.keys(parsed).length} entri data? Data hari yang sama akan diperbarui.`)) return;
+        const merged = { ...entries, ...parsed };
+        setEntries(merged);
+        if (saveQueueRef.current) saveQueueRef.current(merged);
       } catch (err) {
-        alert('File nggak valid — pastikan itu JSON hasil export yang benar.');
+        alert('File tidak valid.');
       }
     };
     reader.readAsText(file);
@@ -484,183 +207,721 @@ export default function App() {
   };
 
   if (!loaded) {
-    return (
-      <div style={{ fontFamily: "'IBM Plex Mono', monospace", padding: 40, color: '#1A1A1A' }}>
-        Memuat data offline...
-      </div>
-    );
+    return <AppSkeleton />;
   }
+
+  const storageStats = getStorageStats(entries);
 
   return (
     <div
+      className="tracked-root"
       style={{
-        background: '#F4F1EA',
-        color: '#1A1A1A',
-        minHeight: '100vh',
+        backgroundColor: 'var(--bg)',
+        color: 'var(--text)',
+        minHeight: '100dvh',
         boxSizing: 'border-box',
-        padding: 'max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(50px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))',
+        padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))',
+        transition: 'background-color 0.2s ease, color 0.2s ease',
       }}
     >
-      <style>{`
-        input[type=number]::-webkit-inner-spin-button,
-        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-        * { box-sizing: border-box; }
-        button, label { touch-action: manipulation; }
-      `}</style>
-
-      <div style={{ maxWidth: 720, margin: '0 auto' }}>
-        {/* Header */}
-        <div style={{ borderBottom: '4px solid #1A1A1A', paddingBottom: '16px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '12px' }}>
+      <div style={{ maxWidth: 1080, margin: '0 auto' }}>
+        {/* 1. Header with Controls & Save Status */}
+        <header style={{ borderBottom: '4px solid var(--border)', paddingBottom: '16px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '12px' }}>
           <div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: '#6B6658', letterSpacing: '0.1em', marginBottom: '2px' }}>
-              HABIT / SYSTEM • OFFLINE FIRST
+            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', letterSpacing: '0.1em', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span>日本語 HABIT SYSTEM</span>
+              <span>•</span>
+              <span style={{ color: saveStatus === 'saving' ? 'var(--listening)' : saveStatus === 'error' ? 'var(--kanji)' : 'var(--vocab)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                ● {saveStatus === 'saving' ? 'MENYIMPAN...' : saveStatus === 'error' ? 'GAGAL SIMPAN' : 'TERSIMPAN LOKAL'}
+              </span>
             </div>
-            <div style={{ fontSize: '34px', fontWeight: 900, lineHeight: 1, letterSpacing: '-0.03em' }}>
-              <span>trac</span><span style={{ color: '#FF4B1F' }}>/</span><span>ked</span>
+            <div style={{ fontSize: '36px', fontWeight: 900, lineHeight: 1, letterSpacing: '-0.03em', fontFamily: "'Space Grotesk', sans-serif" }}>
+              <span>trac</span><span style={{ color: 'var(--kanji)' }}>/</span><span>ked</span>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            {deferredPrompt && !isInstalled && (
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {/* Install PWA Button */}
+            {deferredPrompt && !isStandalone && (
               <button
                 onClick={handleInstallClick}
                 style={{
                   fontFamily: "'IBM Plex Mono', monospace",
                   fontSize: '11px',
                   fontWeight: 700,
-                  background: '#0047AB',
+                  background: 'var(--bunpou)',
                   color: '#fff',
-                  border: '2px solid #1A1A1A',
-                  padding: '6px 12px',
+                  border: '2px solid var(--border)',
+                  padding: '8px 12px',
                   cursor: 'pointer',
                   borderRadius: '2px',
+                  boxShadow: '2px 2px 0px var(--shadow)',
                 }}
               >
                 + PASANG PWA
               </button>
             )}
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '13px', fontWeight: 600, textAlign: 'right' }}>
-              {selectedDate}
+
+            {/* Target Settings Modal Button */}
+            <button
+              onClick={() => setShowTargetModal(true)}
+              title="Atur Target Harian"
+              aria-label="Atur Target Harian"
+              style={{
+                width: 42,
+                height: 42,
+                background: 'var(--card-bg)',
+                border: '2px solid var(--border)',
+                color: 'var(--text)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '2px 2px 0px var(--shadow)',
+              }}
+            >
+              <Sliders size={18} />
+            </button>
+
+            {/* Sound Toggle */}
+            <button
+              onClick={toggleSound}
+              title={soundEnabled ? 'Suara Aktif' : 'Suara Senyap'}
+              aria-label="Toggle Sound"
+              style={{
+                width: 42,
+                height: 42,
+                background: 'var(--card-bg)',
+                border: '2px solid var(--border)',
+                color: 'var(--text)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '2px 2px 0px var(--shadow)',
+              }}
+            >
+              {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+            </button>
+
+            {/* Dark / Light Mode Toggle */}
+            <button
+              onClick={toggleTheme}
+              title="Ganti Tema"
+              aria-label="Toggle Theme"
+              style={{
+                width: 42,
+                height: 42,
+                background: 'var(--card-bg)',
+                border: '2px solid var(--border)',
+                color: 'var(--text)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '2px 2px 0px var(--shadow)',
+              }}
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+          </div>
+        </header>
+
+        {/* 2. Mobile Tab Switcher (< 768px) */}
+        <div className="mobile-tab-bar" style={{ display: 'none', marginBottom: '16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', border: '2px solid var(--border)', padding: '4px', background: 'var(--card-bg)' }}>
+            <button
+              onClick={() => setActiveTabMobile('habit')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                padding: '10px 14px',
+                border: 'none',
+                background: activeTabMobile === 'habit' ? 'var(--text)' : 'transparent',
+                color: activeTabMobile === 'habit' ? 'var(--bg)' : 'var(--text)',
+                fontFamily: "'Space Grotesk', sans-serif",
+                fontWeight: 700,
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              <Zap size={16} /> HABIT COMMANDER
+            </button>
+            <button
+              onClick={() => setActiveTabMobile('stats')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                padding: '10px 14px',
+                border: 'none',
+                background: activeTabMobile === 'stats' ? 'var(--text)' : 'transparent',
+                color: activeTabMobile === 'stats' ? 'var(--bg)' : 'var(--text)',
+                fontFamily: "'Space Grotesk', sans-serif",
+                fontWeight: 700,
+                fontSize: '14px',
+                cursor: 'pointer',
+              }}
+            >
+              <BarChart3 size={16} /> ANALITIK & GRAFIK
+            </button>
+          </div>
+        </div>
+
+        {/* 3. Main Bento Grid (Tablet/Pad 2-Column or Mobile Single Column) */}
+        <div className="bento-container">
+          {/* LEFT COLUMN: Habit Commander */}
+          <div className={`bento-col-left ${activeTabMobile === 'stats' ? 'mobile-hidden' : ''}`}>
+            {/* Bento Stat Cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '20px' }}>
+              {/* Streak */}
+              <div style={{ border: '3px solid var(--border)', padding: '12px 14px', background: 'var(--card-bg)', boxShadow: '3px 3px 0px var(--shadow)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>STREAK</span>
+                  <Flame size={14} color="var(--kanji)" />
+                </div>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 800, color: 'var(--kanji)' }}>
+                  <StatCounter value={streak} suffix="H" />
+                </div>
+              </div>
+
+              {/* Today Score */}
+              <div style={{ border: '3px solid var(--border)', padding: '12px 14px', background: 'var(--card-bg)', boxShadow: '3px 3px 0px var(--shadow)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>SKOR HARI INI</span>
+                  <Zap size={14} color="var(--bunpou)" />
+                </div>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 800, color: 'var(--bunpou)' }}>
+                  <StatCounter value={todayScore} />
+                </div>
+              </div>
+
+              {/* Best Score */}
+              <div style={{ border: '3px solid var(--border)', padding: '12px 14px', background: 'var(--card-bg)', boxShadow: '3px 3px 0px var(--shadow)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>REKOR PUNCAK</span>
+                  <Trophy size={14} color="var(--listening)" />
+                </div>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 800 }}>
+                  <StatCounter value={bestScore} />
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        {error && (
-          <div style={{ background: '#FF4B1F', color: '#fff', padding: '10px 14px', marginBottom: '16px', fontFamily: "'IBM Plex Mono', monospace", fontSize: '12px' }}>
-            {error}
-          </div>
-        )}
-
-        {/* Stat stamps */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '24px' }}>
-          <StatStamp label="STREAK" value={`${streak}H`} color="#FF4B1F" />
-          <StatStamp label="SKOR HARI INI" value={todayScore} color="#0047AB" />
-          <StatStamp label="REKOR TERBAIK" value={bestScore} />
-        </div>
-
-        {/* Heatmap */}
-        <div style={{ marginBottom: '28px' }}>
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: '#6B6658', marginBottom: '10px' }}>
-            16 MINGGU TERAKHIR — geser & sentuh kotak untuk memilih tanggal
-          </div>
-          <Heatmap entries={entries} onSelectDate={setSelectedDate} selectedDate={selectedDate} />
-        </div>
-
-        {/* Checklist for selected date */}
-        <div style={{ marginBottom: '20px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '6px' }}>
-            <div style={{ fontSize: '18px', fontWeight: 700 }}>
-              Checklist — {selectedDate === todayISO() ? 'Hari ini' : selectedDate}
-            </div>
-            {selectedDate !== todayISO() && (
+            {/* Date Navigator Bar */}
+            <div style={{ border: '3px solid var(--border)', padding: '12px 16px', background: 'var(--card-bg)', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '3px 3px 0px var(--shadow)' }}>
               <button
-                onClick={() => setSelectedDate(todayISO())}
+                onClick={() => stepDate(-1)}
+                title="Hari Sebelumnya"
+                aria-label="Hari Sebelumnya"
                 style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  background: '#E8E4D8',
-                  border: '2px solid #1A1A1A',
-                  padding: '6px 12px',
+                  width: 44,
+                  height: 44,
+                  border: '2px solid var(--border)',
+                  background: 'var(--btn-bg)',
+                  color: 'var(--text)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <ChevronLeft size={20} />
+              </button>
+
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+                  <Calendar size={12} />
+                  <span>{selectedDate === todayISO() ? 'HARI INI' : selectedDate}</span>
+                </div>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '15px', fontWeight: 700 }}>
+                  {formatDateIndo(selectedDate)}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '6px' }}>
+                {selectedDate !== todayISO() && (
+                  <button
+                    onClick={() => setSelectedDate(todayISO())}
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      border: '2px solid var(--border)',
+                      background: 'var(--text)',
+                      color: 'var(--bg)',
+                      padding: '0 10px',
+                      height: 44,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    HARI INI
+                  </button>
+                )}
+                <button
+                  onClick={() => stepDate(1)}
+                  title="Hari Berikutnya"
+                  aria-label="Hari Berikutnya"
+                  style={{
+                    width: 44,
+                    height: 44,
+                    border: '2px solid var(--border)',
+                    background: 'var(--btn-bg)',
+                    color: 'var(--text)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <ChevronRight size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* 4 Category Habit Cards */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '24px' }}>
+              {CATEGORIES.map((cat) => {
+                const val = currentEntry[cat.id] || 0;
+                const target = targets[cat.id] || cat.defaultTarget;
+                const pct = Math.min(100, Math.round((val / target) * 100));
+                const isDone = val >= target;
+
+                return (
+                  <div
+                    key={cat.id}
+                    style={{
+                      border: '3px solid var(--border)',
+                      padding: '14px',
+                      background: 'var(--card-bg)',
+                      boxShadow: '3px 3px 0px var(--shadow)',
+                      position: 'relative',
+                    }}
+                  >
+                    {/* Header Row */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div
+                          style={{
+                            width: 32,
+                            height: 32,
+                            backgroundColor: cat.color,
+                            color: '#fff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: '12px',
+                            fontWeight: 700,
+                            borderRadius: '2px',
+                          }}
+                        >
+                          {cat.num}
+                        </div>
+                        <div>
+                          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 700, lineHeight: 1.1 }}>
+                            {cat.label}
+                          </div>
+                          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
+                            {cat.unit} • Bobot: {cat.weight}x
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Done Badge / Ratio */}
+                      <div style={{ textAlign: 'right' }}>
+                        {isDone ? (
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', fontWeight: 700, background: cat.color, color: '#fff', padding: '3px 8px', borderRadius: '2px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                            <Check size={12} /> SELESAI
+                          </span>
+                        ) : (
+                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
+                            {val} / {target} ({pct}%)
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Striped Progress Bar */}
+                    <div
+                      style={{
+                        height: '10px',
+                        background: 'var(--btn-bg)',
+                        border: '1.5px solid var(--border)',
+                        marginBottom: '12px',
+                        overflow: 'hidden',
+                        borderRadius: '1px',
+                        position: 'relative',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${pct}%`,
+                          height: '100%',
+                          backgroundColor: cat.color,
+                          transition: 'width 0.3s cubic-bezier(0.2, 0.9, 0.3, 1)',
+                        }}
+                      />
+                    </div>
+
+                    {/* Stepper + Input */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', border: '2px solid var(--border)', background: 'var(--input-bg)', height: 48 }}>
+                        <button
+                          onClick={(e) => updateCategory(cat.id, val - 5, e.currentTarget)}
+                          style={stepperBtnStyle}
+                          aria-label={`Kurang 5 ${cat.label}`}
+                        >
+                          <Minus size={18} />
+                        </button>
+                        <input
+                          type="number"
+                          value={val}
+                          onChange={(e) => updateCategory(cat.id, e.target.value)}
+                          style={{
+                            width: 54,
+                            height: '100%',
+                            textAlign: 'center',
+                            border: 'none',
+                            outline: 'none',
+                            fontFamily: "'IBM Plex Mono', monospace",
+                            fontSize: '18px',
+                            fontWeight: 700,
+                            background: 'transparent',
+                            color: 'var(--text)',
+                            padding: 0,
+                          }}
+                        />
+                        <button
+                          onClick={(e) => updateCategory(cat.id, val + 5, e.currentTarget)}
+                          style={stepperBtnStyle}
+                          aria-label={`Tambah 5 ${cat.label}`}
+                        >
+                          <Plus size={18} />
+                        </button>
+                      </div>
+
+                      {/* Preset Action Chips */}
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                        {[1, 5, 10, 25].map((amt) => (
+                          <button
+                            key={amt}
+                            onClick={(e) => updateCategory(cat.id, val + amt, e.currentTarget)}
+                            style={chipBtnStyle}
+                          >
+                            +{amt}
+                          </button>
+                        ))}
+                        <button
+                          onClick={(e) => updateCategory(cat.id, target, e.currentTarget)}
+                          style={{
+                            ...chipBtnStyle,
+                            background: isDone ? 'var(--btn-bg)' : 'var(--text)',
+                            color: isDone ? 'var(--text)' : 'var(--bg)',
+                          }}
+                        >
+                          🎯 Target
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Data Management & Export Footer */}
+            <div style={{ border: '3px solid var(--border)', padding: '16px', background: 'var(--card-bg)', boxShadow: '3px 3px 0px var(--shadow)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                  DATA & CADANGAN OFFLINE
+                </span>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
+                  {storageStats.daysRecorded} hari • {Math.round(storageStats.approxBytes / 1024)} KB
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  onClick={() => exportJSON(entries)}
+                  style={actionBtnStyle}
+                >
+                  <Download size={14} /> EXPORT JSON
+                </button>
+                <button
+                  onClick={() => exportCSV(entries)}
+                  style={{ ...actionBtnStyle, background: 'var(--btn-bg)', color: 'var(--text)' }}
+                >
+                  <Download size={14} /> EXPORT CSV
+                </button>
+                <label
+                  style={{
+                    ...actionBtnStyle,
+                    background: 'var(--card-bg)',
+                    color: 'var(--text)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Upload size={14} /> IMPORT
+                  <input type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT COLUMN: Visualizations & Analytics */}
+          <div className={`bento-col-right ${activeTabMobile === 'habit' ? 'mobile-hidden' : ''}`}>
+            {/* Mastery Tier Banner */}
+            <div style={{ border: '3px solid var(--border)', padding: '16px', background: 'var(--card-bg)', marginBottom: '20px', boxShadow: '3px 3px 0px var(--shadow)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                  STATUS MASTERY • 7-DAY EWMA MOMENTUM
+                </div>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '22px', fontWeight: 800, color: masteryTier.color }}>
+                  {masteryTier.title}
+                </div>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                  {masteryTier.desc}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
+                  INDEKS MOMENTUM
+                </div>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '32px', fontWeight: 900, color: masteryTier.color }}>
+                  <StatCounter value={momentum} />
+                </div>
+              </div>
+            </div>
+
+            {/* 16-Week Heatmap */}
+            <div style={{ marginBottom: '20px' }}>
+              <Suspense fallback={<HeatmapSkeleton />}>
+                <Heatmap
+                  entries={entries}
+                  selectedDate={selectedDate}
+                  onSelectDate={(d) => {
+                    setSelectedDate(d);
+                    if (window.innerWidth < 768) setActiveTabMobile('habit');
+                  }}
+                />
+              </Suspense>
+            </div>
+
+            {/* Statistics Studio (Area, Radar, Stacked Bars, Formula Drawer) */}
+            <div>
+              <Suspense fallback={<StatisticsSkeleton />}>
+                <Statistics
+                  entries={entries}
+                  selectedDate={selectedDate}
+                  onSelectDate={(d) => {
+                    setSelectedDate(d);
+                    if (window.innerWidth < 768) setActiveTabMobile('habit');
+                  }}
+                />
+              </Suspense>
+            </div>
+          </div>
+        </div>
+
+        {/* Target Configuration Modal */}
+        {showTargetModal && (
+          <div
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.65)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px',
+              zIndex: 1000,
+            }}
+          >
+            <div
+              style={{
+                background: 'var(--card-bg)',
+                border: '4px solid var(--border)',
+                boxShadow: '6px 6px 0px var(--shadow)',
+                padding: '24px',
+                maxWidth: 440,
+                width: '100%',
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '20px', fontWeight: 800 }}>
+                  Target Harian Kustom
+                </div>
+                <button
+                  onClick={() => setShowTargetModal(false)}
+                  style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: 800, cursor: 'pointer', color: 'var(--text)' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
+                {CATEGORIES.map((c) => (
+                  <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: c.color }}>
+                        {c.label}
+                      </div>
+                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
+                        {c.unit}
+                      </div>
+                    </div>
+                    <input
+                      type="number"
+                      value={targets[c.id] || c.defaultTarget}
+                      onChange={(e) => {
+                        const next = { ...targets, [c.id]: Math.max(1, parseInt(e.target.value, 10) || 1) };
+                        setTargets(next);
+                        saveTargets(next);
+                      }}
+                      style={{
+                        width: 70,
+                        padding: '8px',
+                        border: '2px solid var(--border)',
+                        background: 'var(--input-bg)',
+                        color: 'var(--text)',
+                        fontFamily: "'IBM Plex Mono', monospace",
+                        fontSize: '16px',
+                        fontWeight: 700,
+                        textAlign: 'center',
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setShowTargetModal(false)}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  background: 'var(--text)',
+                  color: 'var(--bg)',
+                  border: '2px solid var(--border)',
+                  fontFamily: "'Space Grotesk', sans-serif",
+                  fontSize: '14px',
+                  fontWeight: 800,
                   cursor: 'pointer',
                 }}
               >
-                ← kembali ke hari ini
+                SIMPAN TARGET
               </button>
-            )}
+            </div>
           </div>
-          {CATEGORIES.map((cat) => (
-            <CategoryRow
-              key={`${selectedDate}-${cat.id}`}
-              cat={cat}
-              value={currentEntry[cat.id]}
-              onChange={updateCategory}
-            />
-          ))}
-        </div>
-
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: '#6B6658', marginBottom: '20px', lineHeight: 1.5 }}>
-          Skor = (volume terhitung × 0.5, diminishing return di atas 200) × (1 + 0.25 per kategori aktif). 4 kategori penuh = bonus pengali 2x.
-        </div>
-
-        {/* Export / Import Bar */}
-        <div style={{ borderTop: '4px solid #1A1A1A', paddingTop: '16px' }}>
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: '#6B6658', marginBottom: '10px' }}>
-            MANAJEMEN DATA & CADANGAN (OFFLINE)
-          </div>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <button
-              onClick={exportJSON}
-              style={{
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: '12px',
-                border: '2px solid #1A1A1A',
-                background: '#1A1A1A',
-                color: '#fff',
-                padding: '10px 16px',
-                cursor: 'pointer',
-                fontWeight: 600,
-                minHeight: '44px',
-              }}
-            >
-              EXPORT JSON
-            </button>
-            <button
-              onClick={exportCSV}
-              style={{
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: '12px',
-                border: '2px solid #1A1A1A',
-                background: '#FDFCFA',
-                color: '#1A1A1A',
-                padding: '10px 16px',
-                cursor: 'pointer',
-                fontWeight: 600,
-                minHeight: '44px',
-              }}
-            >
-              EXPORT CSV
-            </button>
-            <label
-              style={{
-                fontFamily: "'IBM Plex Mono', monospace",
-                fontSize: '12px',
-                border: '2px solid #1A1A1A',
-                background: '#E8E4D8',
-                color: '#1A1A1A',
-                padding: '10px 16px',
-                cursor: 'pointer',
-                fontWeight: 600,
-                display: 'inline-flex',
-                alignItems: 'center',
-                minHeight: '44px',
-              }}
-            >
-              IMPORT JSON
-              <input type="file" accept=".json" onChange={importData} style={{ display: 'none' }} />
-            </label>
-          </div>
-        </div>
+        )}
       </div>
+
+      {/* Global & Responsive Layout Styles */}
+      <style>{`
+        :root, [data-theme="light"] {
+          --bg: #F4F1EA;
+          --card-bg: #FDFCFA;
+          --text: #1A1A1A;
+          --text-muted: #6B6658;
+          --border: #1A1A1A;
+          --shadow: #1A1A1A;
+          --input-bg: #FFFFFF;
+          --btn-bg: #E8E4D8;
+          --btn-hover: #D8D2BE;
+          --kanji: #FF4B1F;
+          --bunpou: #0047AB;
+          --vocab: #1A8A3E;
+          --listening: #B8860B;
+        }
+
+        [data-theme="dark"] {
+          --bg: #121212;
+          --card-bg: #1C1C1C;
+          --text: #F0EFEA;
+          --text-muted: #9E998B;
+          --border: #383838;
+          --shadow: #000000;
+          --input-bg: #262626;
+          --btn-bg: #2A2A2A;
+          --btn-hover: #383838;
+          --kanji: #FF5A30;
+          --bunpou: #2672EC;
+          --vocab: #28B052;
+          --listening: #D4A017;
+        }
+
+        * { box-sizing: border-box; }
+        body { margin: 0; }
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        button, label { touch-action: manipulation; user-select: none; }
+
+        /* Bento Grid: 2 Column for Tablets & Desktop */
+        .bento-container {
+          display: grid;
+          grid-template-columns: 44% 56%;
+          gap: 20px;
+          align-items: start;
+        }
+
+        /* Responsive Mobile Layout (< 768px) */
+        @media (max-width: 768px) {
+          .bento-container {
+            grid-template-columns: 1fr;
+            gap: 16px;
+          }
+          .mobile-tab-bar {
+            display: block !important;
+          }
+          .mobile-hidden {
+            display: none !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }
+
+const stepperBtnStyle = {
+  width: 44,
+  height: '100%',
+  border: 'none',
+  background: 'var(--btn-bg)',
+  cursor: 'pointer',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  color: 'var(--text)',
+};
+
+const chipBtnStyle = {
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: '12px',
+  fontWeight: 700,
+  border: '2px solid var(--border)',
+  background: 'var(--btn-bg)',
+  color: 'var(--text)',
+  padding: '6px 10px',
+  cursor: 'pointer',
+  borderRadius: '2px',
+};
+
+const actionBtnStyle = {
+  fontFamily: "'IBM Plex Mono', monospace",
+  fontSize: '12px',
+  border: '2px solid var(--border)',
+  background: 'var(--text)',
+  color: 'var(--bg)',
+  padding: '10px 14px',
+  cursor: 'pointer',
+  fontWeight: 700,
+  minHeight: '44px',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+};

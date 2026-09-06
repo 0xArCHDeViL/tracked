@@ -1,8 +1,3 @@
-import crypto from 'node:crypto';
-if (!globalThis.crypto) {
-  globalThis.crypto = crypto;
-}
-
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
