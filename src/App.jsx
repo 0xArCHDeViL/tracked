@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense, lazy } from 'react';
 import {
-  Flame, Trophy, Zap, Target, Calendar, Volume2, VolumeX, Sun, Moon,
-  BarChart3, Download, Upload, Plus, Minus, Check, ChevronLeft, ChevronRight,
-  Sliders, Sparkles, RefreshCw, Layers
+  Flame, Trophy, Zap, Sliders, Volume2, VolumeX, Sun, Moon,
+  ChevronLeft, ChevronRight, Plus, Minus, Download, Upload, BarChart3, Check
 } from 'lucide-react';
 
 import {
@@ -12,16 +11,15 @@ import {
 
 import {
   loadInitialData, createDebouncedSaver, saveTargets, saveTheme,
-  saveSoundSetting, exportJSON, exportCSV, isValidEntriesShape, getStorageStats
+  saveSoundSetting, exportJSON, exportCSV, isValidEntriesShape
 } from './utils/storage.js';
 
-import { playClickSound, playGoalChime, playFanfare, triggerHaptic } from './utils/feedback.js';
+import { playClickSound, playGoalChime, triggerHaptic } from './utils/feedback.js';
 import { animatePress, createCelebrationBurst } from './utils/motion.js';
 
-import { AppSkeleton, HeatmapSkeleton, StatisticsSkeleton } from './components/SkeletonLoader.jsx';
 import StatCounter from './components/StatCounter.jsx';
 
-// Lazy-loaded visual modules for performance
+// Lazy-loaded visual modules for optimal hydration
 const Heatmap = lazy(() => import('./components/Heatmap.jsx'));
 const Statistics = lazy(() => import('./components/Statistics.jsx'));
 
@@ -34,13 +32,11 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState(todayISO());
 
   // UI state
-  const [saveStatus, setSaveStatus] = useState('saved'); // 'saved', 'saving', 'error'
-  const [activeTabMobile, setActiveTabMobile] = useState('habit'); // 'habit' | 'stats'
+  const [saveStatus, setSaveStatus] = useState('saved');
+  const [activeTab, setActiveTab] = useState('habit'); // 'habit' | 'stats'
   const [showTargetModal, setShowTargetModal] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState(null);
-  const [isStandalone, setIsStandalone] = useState(false);
 
-  // Initialize Debounced Saver
   const saveQueueRef = useRef(null);
 
   useEffect(() => {
@@ -51,7 +47,6 @@ export default function App() {
     );
   }, []);
 
-  // Load initial data
   useEffect(() => {
     (async () => {
       const data = await loadInitialData();
@@ -62,10 +57,6 @@ export default function App() {
       setLoaded(true);
     })();
 
-    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
-      setIsStandalone(true);
-    }
-
     const handleBeforeInstall = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
@@ -75,23 +66,18 @@ export default function App() {
     return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
   }, []);
 
-  // Apply theme to body
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
-  // Calculations
+  // Derived metrics
   const streak = useMemo(() => computeStreak(entries), [entries]);
   const todayScore = useMemo(() => computeScore(entries[todayISO()]), [entries]);
-  const bestScore = useMemo(() => {
-    return Object.values(entries).reduce((max, e) => Math.max(max, computeScore(e)), 0);
-  }, [entries]);
-
   const momentum = useMemo(() => computeMomentum(entries), [entries]);
-  const masteryTier = useMemo(() => getMasteryTier(momentum), [momentum]);
+  const tier = useMemo(() => getMasteryTier(momentum), [momentum]);
   const currentEntry = entries[selectedDate] || {};
 
-  // Mutation & Persistence
+  // Handlers
   const updateCategory = useCallback((catId, val, btnElem) => {
     if (btnElem) animatePress(btnElem);
     playClickSound(soundEnabled);
@@ -101,7 +87,6 @@ export default function App() {
     const prevVal = currentEntry[catId] || 0;
     const catTarget = targets[catId] || 15;
 
-    // Trigger celebration if crossing target threshold
     if (prevVal < catTarget && nextVal >= catTarget) {
       playGoalChime(soundEnabled);
       triggerHaptic('goal');
@@ -120,36 +105,9 @@ export default function App() {
     };
 
     setEntries(nextEntries);
-    if (saveQueueRef.current) {
-      saveQueueRef.current(nextEntries);
-    }
+    if (saveQueueRef.current) saveQueueRef.current(nextEntries);
   }, [entries, selectedDate, currentEntry, targets, soundEnabled]);
 
-  // Keyboard Shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-      if (e.key === '1') updateCategory('kanji', (currentEntry.kanji || 0) + 5);
-      else if (e.key === '2') updateCategory('bunpou', (currentEntry.bunpou || 0) + 5);
-      else if (e.key === '3') updateCategory('vocab', (currentEntry.vocab || 0) + 5);
-      else if (e.key === '4') updateCategory('listening', (currentEntry.listening || 0) + 5);
-      else if (e.key.toLowerCase() === 't') setSelectedDate(todayISO());
-      else if (e.key.toLowerCase() === 'd') {
-        const nextT = theme === 'light' ? 'dark' : 'light';
-        setTheme(nextT);
-        saveTheme(nextT);
-      } else if (e.key.toLowerCase() === 'm') {
-        setSoundEnabled((prev) => {
-          saveSoundSetting(!prev);
-          return !prev;
-        });
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentEntry, updateCategory, theme]);
-
-  // Date step
   const stepDate = (offset) => {
     playClickSound(soundEnabled);
     triggerHaptic('tap');
@@ -173,16 +131,6 @@ export default function App() {
     saveSoundSetting(next);
   };
 
-  const handleInstallClick = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setIsStandalone(true);
-      setDeferredPrompt(null);
-    }
-  };
-
   const handleImport = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -191,591 +139,256 @@ export default function App() {
       try {
         const parsed = JSON.parse(ev.target.result);
         if (!isValidEntriesShape(parsed)) {
-          alert('File tidak sesuai skema (harus JSON ekspor trac/ked).');
+          alert('Format JSON tidak valid.');
           return;
         }
-        if (!window.confirm(`Impor ${Object.keys(parsed).length} entri data? Data hari yang sama akan diperbarui.`)) return;
         const merged = { ...entries, ...parsed };
         setEntries(merged);
         if (saveQueueRef.current) saveQueueRef.current(merged);
       } catch (err) {
-        alert('File tidak valid.');
+        alert('Gagal membaca file.');
       }
     };
     reader.readAsText(file);
     e.target.value = '';
   };
 
-  if (!loaded) {
-    return <AppSkeleton />;
-  }
-
-  const storageStats = getStorageStats(entries);
+  if (!loaded) return null;
 
   return (
-    <div
-      className="tracked-root"
-      style={{
-        backgroundColor: 'var(--bg)',
-        color: 'var(--text)',
-        minHeight: '100dvh',
-        boxSizing: 'border-box',
-        padding: 'max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left))',
-        transition: 'background-color 0.2s ease, color 0.2s ease',
-      }}
-    >
-      <div style={{ maxWidth: 1080, margin: '0 auto' }}>
-        {/* 1. Header with Controls & Save Status */}
-        <header style={{ borderBottom: '4px solid var(--border)', paddingBottom: '16px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', letterSpacing: '0.1em', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span>日本語 HABIT SYSTEM</span>
-              <span>•</span>
-              <span style={{ color: saveStatus === 'saving' ? 'var(--listening)' : saveStatus === 'error' ? 'var(--kanji)' : 'var(--vocab)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                ● {saveStatus === 'saving' ? 'MENYIMPAN...' : saveStatus === 'error' ? 'GAGAL SIMPAN' : 'TERSIMPAN LOKAL'}
-              </span>
-            </div>
-            <div style={{ fontSize: '36px', fontWeight: 900, lineHeight: 1, letterSpacing: '-0.03em', fontFamily: "'Space Grotesk', sans-serif" }}>
-              <span>trac</span><span style={{ color: 'var(--kanji)' }}>/</span><span>ked</span>
-            </div>
+    <div className="swiss-root">
+      <div className="swiss-shell">
+        {/* 1. Header (Brand & Controls, Zero Filler) */}
+        <header className="swiss-header">
+          <div className="brand-group">
+            <span className="brand-title">trac<span style={{ color: 'var(--accent)' }}>/</span>ked</span>
+            <span className="brand-status">
+              ● {saveStatus === 'saving' ? 'SIMPAN...' : saveStatus === 'error' ? 'ERR' : 'LOKAL'}
+            </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {/* Install PWA Button */}
-            {deferredPrompt && !isStandalone && (
+          <div className="control-group">
+            {deferredPrompt && (
               <button
-                onClick={handleInstallClick}
-                style={{
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  background: 'var(--bunpou)',
-                  color: '#fff',
-                  border: '2px solid var(--border)',
-                  padding: '8px 12px',
-                  cursor: 'pointer',
-                  borderRadius: '2px',
-                  boxShadow: '2px 2px 0px var(--shadow)',
+                onClick={() => {
+                  deferredPrompt.prompt();
+                  setDeferredPrompt(null);
                 }}
+                className="swiss-icon-btn"
+                title="Pasang PWA"
               >
-                + PASANG PWA
+                +PWA
               </button>
             )}
-
-            {/* Target Settings Modal Button */}
             <button
               onClick={() => setShowTargetModal(true)}
-              title="Atur Target Harian"
-              aria-label="Atur Target Harian"
-              style={{
-                width: 42,
-                height: 42,
-                background: 'var(--card-bg)',
-                border: '2px solid var(--border)',
-                color: 'var(--text)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '2px 2px 0px var(--shadow)',
-              }}
+              className="swiss-icon-btn"
+              title="Target"
+              aria-label="Target"
             >
-              <Sliders size={18} />
+              <Sliders size={16} />
             </button>
-
-            {/* Sound Toggle */}
             <button
               onClick={toggleSound}
-              title={soundEnabled ? 'Suara Aktif' : 'Suara Senyap'}
-              aria-label="Toggle Sound"
-              style={{
-                width: 42,
-                height: 42,
-                background: 'var(--card-bg)',
-                border: '2px solid var(--border)',
-                color: 'var(--text)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '2px 2px 0px var(--shadow)',
-              }}
+              className="swiss-icon-btn"
+              title="Suara"
+              aria-label="Suara"
             >
-              {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+              {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
             </button>
-
-            {/* Dark / Light Mode Toggle */}
             <button
               onClick={toggleTheme}
-              title="Ganti Tema"
-              aria-label="Toggle Theme"
-              style={{
-                width: 42,
-                height: 42,
-                background: 'var(--card-bg)',
-                border: '2px solid var(--border)',
-                color: 'var(--text)',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '2px 2px 0px var(--shadow)',
-              }}
+              className="swiss-icon-btn"
+              title="Tema"
+              aria-label="Tema"
             >
-              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+              {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </div>
         </header>
 
-        {/* 2. Mobile Tab Switcher (< 768px) */}
-        <div className="mobile-tab-bar" style={{ display: 'none', marginBottom: '16px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', border: '2px solid var(--border)', padding: '4px', background: 'var(--card-bg)' }}>
-            <button
-              onClick={() => setActiveTabMobile('habit')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                padding: '10px 14px',
-                border: 'none',
-                background: activeTabMobile === 'habit' ? 'var(--text)' : 'transparent',
-                color: activeTabMobile === 'habit' ? 'var(--bg)' : 'var(--text)',
-                fontFamily: "'Space Grotesk', sans-serif",
-                fontWeight: 700,
-                fontSize: '14px',
-                cursor: 'pointer',
-              }}
-            >
-              <Zap size={16} /> HABIT COMMANDER
-            </button>
-            <button
-              onClick={() => setActiveTabMobile('stats')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                padding: '10px 14px',
-                border: 'none',
-                background: activeTabMobile === 'stats' ? 'var(--text)' : 'transparent',
-                color: activeTabMobile === 'stats' ? 'var(--bg)' : 'var(--text)',
-                fontFamily: "'Space Grotesk', sans-serif",
-                fontWeight: 700,
-                fontSize: '14px',
-                cursor: 'pointer',
-              }}
-            >
-              <BarChart3 size={16} /> ANALITIK & GRAFIK
-            </button>
+        {/* 2. Metrics Bar (3 Equal Columns, 1px Hairline Grid) */}
+        <div className="swiss-metrics">
+          <div className="metric-col">
+            <span className="metric-label">STREAK</span>
+            <span className="metric-val" style={{ color: 'var(--accent)' }}>
+              <StatCounter value={streak} suffix="H" />
+            </span>
+          </div>
+          <div className="metric-col">
+            <span className="metric-label">SKOR HARI INI</span>
+            <span className="metric-val">
+              <StatCounter value={todayScore} />
+            </span>
+          </div>
+          <div className="metric-col">
+            <span className="metric-label">PANGKAT</span>
+            <span className="metric-val" style={{ fontSize: '16px', color: tier.color }}>
+              {tier.title.split(' ')[1] || tier.title}
+            </span>
           </div>
         </div>
 
-        {/* 3. Main Bento Grid (Tablet/Pad 2-Column or Mobile Single Column) */}
-        <div className="bento-container">
-          {/* LEFT COLUMN: Habit Commander */}
-          <div className={`bento-col-left ${activeTabMobile === 'stats' ? 'mobile-hidden' : ''}`}>
-            {/* Bento Stat Cards */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px', marginBottom: '20px' }}>
-              {/* Streak */}
-              <div style={{ border: '3px solid var(--border)', padding: '12px 14px', background: 'var(--card-bg)', boxShadow: '3px 3px 0px var(--shadow)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>STREAK</span>
-                  <Flame size={14} color="var(--kanji)" />
-                </div>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 800, color: 'var(--kanji)' }}>
-                  <StatCounter value={streak} suffix="H" />
-                </div>
-              </div>
-
-              {/* Today Score */}
-              <div style={{ border: '3px solid var(--border)', padding: '12px 14px', background: 'var(--card-bg)', boxShadow: '3px 3px 0px var(--shadow)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>SKOR HARI INI</span>
-                  <Zap size={14} color="var(--bunpou)" />
-                </div>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 800, color: 'var(--bunpou)' }}>
-                  <StatCounter value={todayScore} />
-                </div>
-              </div>
-
-              {/* Best Score */}
-              <div style={{ border: '3px solid var(--border)', padding: '12px 14px', background: 'var(--card-bg)', boxShadow: '3px 3px 0px var(--shadow)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                  <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>REKOR PUNCAK</span>
-                  <Trophy size={14} color="var(--listening)" />
-                </div>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '28px', fontWeight: 800 }}>
-                  <StatCounter value={bestScore} />
-                </div>
-              </div>
-            </div>
-
-            {/* Date Navigator Bar */}
-            <div style={{ border: '3px solid var(--border)', padding: '12px 16px', background: 'var(--card-bg)', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '3px 3px 0px var(--shadow)' }}>
-              <button
-                onClick={() => stepDate(-1)}
-                title="Hari Sebelumnya"
-                aria-label="Hari Sebelumnya"
-                style={{
-                  width: 44,
-                  height: 44,
-                  border: '2px solid var(--border)',
-                  background: 'var(--btn-bg)',
-                  color: 'var(--text)',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <ChevronLeft size={20} />
+        {/* 3. Navigation Bar (Strict 1-Line Flush Alignment) */}
+        <div className="swiss-date-nav">
+          <button onClick={() => stepDate(-1)} className="nav-btn" aria-label="Sebelumnya">
+            <ChevronLeft size={18} />
+          </button>
+          <div className="date-center">
+            <span className="date-text">{formatDateIndo(selectedDate)}</span>
+            {selectedDate !== todayISO() && (
+              <button onClick={() => setSelectedDate(todayISO())} className="today-chip">
+                HARI INI
               </button>
+            )}
+          </div>
+          <button onClick={() => stepDate(1)} className="nav-btn" aria-label="Berikutnya">
+            <ChevronRight size={18} />
+          </button>
+        </div>
 
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
-                  <Calendar size={12} />
-                  <span>{selectedDate === todayISO() ? 'HARI INI' : selectedDate}</span>
-                </div>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '15px', fontWeight: 700 }}>
-                  {formatDateIndo(selectedDate)}
-                </div>
-              </div>
+        {/* 4. Tab Selector (Seamless View Switcher) */}
+        <div className="swiss-tabs">
+          <button
+            onClick={() => setActiveTab('habit')}
+            className={`tab-btn ${activeTab === 'habit' ? 'active' : ''}`}
+          >
+            HABIT COMMANDER
+          </button>
+          <button
+            onClick={() => setActiveTab('stats')}
+            className={`tab-btn ${activeTab === 'stats' ? 'active' : ''}`}
+          >
+            STATISTIK & HEATMAP
+          </button>
+        </div>
 
-              <div style={{ display: 'flex', gap: '6px' }}>
-                {selectedDate !== todayISO() && (
-                  <button
-                    onClick={() => setSelectedDate(todayISO())}
-                    style={{
-                      fontFamily: "'IBM Plex Mono', monospace",
-                      fontSize: '11px',
-                      fontWeight: 700,
-                      border: '2px solid var(--border)',
-                      background: 'var(--text)',
-                      color: 'var(--bg)',
-                      padding: '0 10px',
-                      height: 44,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    HARI INI
-                  </button>
-                )}
-                <button
-                  onClick={() => stepDate(1)}
-                  title="Hari Berikutnya"
-                  aria-label="Hari Berikutnya"
-                  style={{
-                    width: 44,
-                    height: 44,
-                    border: '2px solid var(--border)',
-                    background: 'var(--btn-bg)',
-                    color: 'var(--text)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <ChevronRight size={20} />
-                </button>
-              </div>
-            </div>
+        {/* 5. View Content */}
+        {activeTab === 'habit' ? (
+          <div className="habit-stack">
+            {CATEGORIES.map((cat) => {
+              const val = currentEntry[cat.id] || 0;
+              const target = targets[cat.id] || cat.defaultTarget;
+              const pct = Math.min(100, Math.round((val / target) * 100));
+              const isDone = val >= target;
 
-            {/* 4 Category Habit Cards */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '24px' }}>
-              {CATEGORIES.map((cat) => {
-                const val = currentEntry[cat.id] || 0;
-                const target = targets[cat.id] || cat.defaultTarget;
-                const pct = Math.min(100, Math.round((val / target) * 100));
-                const isDone = val >= target;
-
-                return (
-                  <div
-                    key={cat.id}
-                    style={{
-                      border: '3px solid var(--border)',
-                      padding: '14px',
-                      background: 'var(--card-bg)',
-                      boxShadow: '3px 3px 0px var(--shadow)',
-                      position: 'relative',
-                    }}
-                  >
-                    {/* Header Row */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div
-                          style={{
-                            width: 32,
-                            height: 32,
-                            backgroundColor: cat.color,
-                            color: '#fff',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontFamily: "'IBM Plex Mono', monospace",
-                            fontSize: '12px',
-                            fontWeight: 700,
-                            borderRadius: '2px',
-                          }}
-                        >
-                          {cat.num}
-                        </div>
-                        <div>
-                          <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '18px', fontWeight: 700, lineHeight: 1.1 }}>
-                            {cat.label}
-                          </div>
-                          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
-                            {cat.unit} • Bobot: {cat.weight}x
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Done Badge / Ratio */}
-                      <div style={{ textAlign: 'right' }}>
-                        {isDone ? (
-                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', fontWeight: 700, background: cat.color, color: '#fff', padding: '3px 8px', borderRadius: '2px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                            <Check size={12} /> SELESAI
-                          </span>
-                        ) : (
-                          <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>
-                            {val} / {target} ({pct}%)
-                          </span>
-                        )}
-                      </div>
+              return (
+                <div key={cat.id} className="category-row">
+                  {/* Top: Category Title & Compact Stepper */}
+                  <div className="cat-top">
+                    <div className="cat-meta">
+                      <span className="cat-num">{cat.num}</span>
+                      <span className="cat-name">{cat.label}</span>
+                      <span className="cat-ratio">{val}/{target}</span>
                     </div>
 
-                    {/* Striped Progress Bar */}
-                    <div
-                      style={{
-                        height: '10px',
-                        background: 'var(--btn-bg)',
-                        border: '1.5px solid var(--border)',
-                        marginBottom: '12px',
-                        overflow: 'hidden',
-                        borderRadius: '1px',
-                        position: 'relative',
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: `${pct}%`,
-                          height: '100%',
-                          backgroundColor: cat.color,
-                          transition: 'width 0.3s cubic-bezier(0.2, 0.9, 0.3, 1)',
-                        }}
+                    <div className="cat-stepper">
+                      <button
+                        onClick={(e) => updateCategory(cat.id, val - 5, e.currentTarget)}
+                        className="stepper-btn"
+                        aria-label={`Kurang 5 ${cat.label}`}
+                      >
+                        <Minus size={14} />
+                      </button>
+                      <input
+                        type="number"
+                        value={val}
+                        onChange={(e) => updateCategory(cat.id, e.target.value)}
+                        className="stepper-input"
                       />
-                    </div>
-
-                    {/* Stepper + Input */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', border: '2px solid var(--border)', background: 'var(--input-bg)', height: 48 }}>
-                        <button
-                          onClick={(e) => updateCategory(cat.id, val - 5, e.currentTarget)}
-                          style={stepperBtnStyle}
-                          aria-label={`Kurang 5 ${cat.label}`}
-                        >
-                          <Minus size={18} />
-                        </button>
-                        <input
-                          type="number"
-                          value={val}
-                          onChange={(e) => updateCategory(cat.id, e.target.value)}
-                          style={{
-                            width: 54,
-                            height: '100%',
-                            textAlign: 'center',
-                            border: 'none',
-                            outline: 'none',
-                            fontFamily: "'IBM Plex Mono', monospace",
-                            fontSize: '18px',
-                            fontWeight: 700,
-                            background: 'transparent',
-                            color: 'var(--text)',
-                            padding: 0,
-                          }}
-                        />
-                        <button
-                          onClick={(e) => updateCategory(cat.id, val + 5, e.currentTarget)}
-                          style={stepperBtnStyle}
-                          aria-label={`Tambah 5 ${cat.label}`}
-                        >
-                          <Plus size={18} />
-                        </button>
-                      </div>
-
-                      {/* Preset Action Chips */}
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                        {[1, 5, 10, 25].map((amt) => (
-                          <button
-                            key={amt}
-                            onClick={(e) => updateCategory(cat.id, val + amt, e.currentTarget)}
-                            style={chipBtnStyle}
-                          >
-                            +{amt}
-                          </button>
-                        ))}
-                        <button
-                          onClick={(e) => updateCategory(cat.id, target, e.currentTarget)}
-                          style={{
-                            ...chipBtnStyle,
-                            background: isDone ? 'var(--btn-bg)' : 'var(--text)',
-                            color: isDone ? 'var(--text)' : 'var(--bg)',
-                          }}
-                        >
-                          🎯 Target
-                        </button>
-                      </div>
+                      <button
+                        onClick={(e) => updateCategory(cat.id, val + 5, e.currentTarget)}
+                        className="stepper-btn"
+                        aria-label={`Tambah 5 ${cat.label}`}
+                      >
+                        <Plus size={14} />
+                      </button>
                     </div>
                   </div>
-                );
-              })}
-            </div>
 
-            {/* Data Management & Export Footer */}
-            <div style={{ border: '3px solid var(--border)', padding: '16px', background: 'var(--card-bg)', boxShadow: '3px 3px 0px var(--shadow)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                  DATA & CADANGAN OFFLINE
-                </span>
-                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
-                  {storageStats.daysRecorded} hari • {Math.round(storageStats.approxBytes / 1024)} KB
-                </span>
-              </div>
+                  {/* Middle: Hairline Progress */}
+                  <div className="cat-progress-track">
+                    <div
+                      className="cat-progress-fill"
+                      style={{ width: `${pct}%`, backgroundColor: cat.color }}
+                    />
+                  </div>
 
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                <button
-                  onClick={() => exportJSON(entries)}
-                  style={actionBtnStyle}
-                >
-                  <Download size={14} /> EXPORT JSON
-                </button>
-                <button
-                  onClick={() => exportCSV(entries)}
-                  style={{ ...actionBtnStyle, background: 'var(--btn-bg)', color: 'var(--text)' }}
-                >
-                  <Download size={14} /> EXPORT CSV
-                </button>
-                <label
-                  style={{
-                    ...actionBtnStyle,
-                    background: 'var(--card-bg)',
-                    color: 'var(--text)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <Upload size={14} /> IMPORT
-                  <input type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
-                </label>
-              </div>
-            </div>
-          </div>
+                  {/* Bottom: 4 Action Buttons in 100% Equal Grid */}
+                  <div className="cat-actions-grid">
+                    {[1, 5, 10].map((amt) => (
+                      <button
+                        key={amt}
+                        onClick={(e) => updateCategory(cat.id, val + amt, e.currentTarget)}
+                        className="action-chip"
+                      >
+                        +{amt}
+                      </button>
+                    ))}
+                    <button
+                      onClick={(e) => updateCategory(cat.id, target, e.currentTarget)}
+                      className={`action-chip ${isDone ? 'done' : 'target'}`}
+                    >
+                      {isDone ? <Check size={12} /> : '🎯'} {target}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
 
-          {/* RIGHT COLUMN: Visualizations & Analytics */}
-          <div className={`bento-col-right ${activeTabMobile === 'habit' ? 'mobile-hidden' : ''}`}>
-            {/* Mastery Tier Banner */}
-            <div style={{ border: '3px solid var(--border)', padding: '16px', background: 'var(--card-bg)', marginBottom: '20px', boxShadow: '3px 3px 0px var(--shadow)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-              <div>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
-                  STATUS MASTERY • 7-DAY EWMA MOMENTUM
-                </div>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '22px', fontWeight: 800, color: masteryTier.color }}>
-                  {masteryTier.title}
-                </div>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  {masteryTier.desc}
-                </div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
-                  INDEKS MOMENTUM
-                </div>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '32px', fontWeight: 900, color: masteryTier.color }}>
-                  <StatCounter value={momentum} />
-                </div>
-              </div>
-            </div>
-
-            {/* 16-Week Heatmap */}
-            <div style={{ marginBottom: '20px' }}>
-              <Suspense fallback={<HeatmapSkeleton />}>
-                <Heatmap
-                  entries={entries}
-                  selectedDate={selectedDate}
-                  onSelectDate={(d) => {
-                    setSelectedDate(d);
-                    if (window.innerWidth < 768) setActiveTabMobile('habit');
-                  }}
-                />
-              </Suspense>
-            </div>
-
-            {/* Statistics Studio (Area, Radar, Stacked Bars, Formula Drawer) */}
-            <div>
-              <Suspense fallback={<StatisticsSkeleton />}>
-                <Statistics
-                  entries={entries}
-                  selectedDate={selectedDate}
-                  onSelectDate={(d) => {
-                    setSelectedDate(d);
-                    if (window.innerWidth < 768) setActiveTabMobile('habit');
-                  }}
-                />
-              </Suspense>
+            {/* Data Bar (Equal 3-Column Grid) */}
+            <div className="data-grid">
+              <button onClick={() => exportJSON(entries)} className="data-btn">
+                <Download size={13} /> JSON
+              </button>
+              <button onClick={() => exportCSV(entries)} className="data-btn">
+                <Download size={13} /> CSV
+              </button>
+              <label className="data-btn" style={{ cursor: 'pointer' }}>
+                <Upload size={13} /> IMPORT
+                <input type="file" accept=".json" onChange={handleImport} style={{ display: 'none' }} />
+              </label>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="stats-stack">
+            <Suspense fallback={null}>
+              <Heatmap
+                entries={entries}
+                selectedDate={selectedDate}
+                onSelectDate={(d) => {
+                  setSelectedDate(d);
+                  setActiveTab('habit');
+                }}
+              />
+            </Suspense>
 
-        {/* Target Configuration Modal */}
+            <Suspense fallback={null}>
+              <Statistics
+                entries={entries}
+                selectedDate={selectedDate}
+                onSelectDate={(d) => {
+                  setSelectedDate(d);
+                  setActiveTab('habit');
+                }}
+              />
+            </Suspense>
+          </div>
+        )}
+
+        {/* Modal Target Settings */}
         {showTargetModal && (
-          <div
-            style={{
-              position: 'fixed',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              backgroundColor: 'rgba(0, 0, 0, 0.65)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: '16px',
-              zIndex: 1000,
-            }}
-          >
-            <div
-              style={{
-                background: 'var(--card-bg)',
-                border: '4px solid var(--border)',
-                boxShadow: '6px 6px 0px var(--shadow)',
-                padding: '24px',
-                maxWidth: 440,
-                width: '100%',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: '20px', fontWeight: 800 }}>
-                  Target Harian Kustom
-                </div>
-                <button
-                  onClick={() => setShowTargetModal(false)}
-                  style={{ background: 'none', border: 'none', fontSize: '20px', fontWeight: 800, cursor: 'pointer', color: 'var(--text)' }}
-                >
-                  ✕
-                </button>
+          <div className="modal-overlay">
+            <div className="modal-dialog">
+              <div className="modal-header">
+                <span className="modal-title">TARGET HARIAN</span>
+                <button onClick={() => setShowTargetModal(false)} className="modal-close">✕</button>
               </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
+              <div className="modal-body">
                 {CATEGORIES.map((c) => (
-                  <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div>
-                      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, color: c.color }}>
-                        {c.label}
-                      </div>
-                      <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
-                        {c.unit}
-                      </div>
-                    </div>
+                  <div key={c.id} className="modal-row">
+                    <span style={{ fontWeight: 600 }}>{c.label}</span>
                     <input
                       type="number"
                       value={targets[c.id] || c.defaultTarget}
@@ -784,144 +397,440 @@ export default function App() {
                         setTargets(next);
                         saveTargets(next);
                       }}
-                      style={{
-                        width: 70,
-                        padding: '8px',
-                        border: '2px solid var(--border)',
-                        background: 'var(--input-bg)',
-                        color: 'var(--text)',
-                        fontFamily: "'IBM Plex Mono', monospace",
-                        fontSize: '16px',
-                        fontWeight: 700,
-                        textAlign: 'center',
-                      }}
+                      className="modal-input"
                     />
                   </div>
                 ))}
               </div>
 
-              <button
-                onClick={() => setShowTargetModal(false)}
-                style={{
-                  width: '100%',
-                  padding: '12px',
-                  background: 'var(--text)',
-                  color: 'var(--bg)',
-                  border: '2px solid var(--border)',
-                  fontFamily: "'Space Grotesk', sans-serif",
-                  fontSize: '14px',
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                }}
-              >
-                SIMPAN TARGET
+              <button onClick={() => setShowTargetModal(false)} className="modal-save-btn">
+                SIMPAN
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* Global & Responsive Layout Styles */}
+      {/* Pure Swiss Minimalist CSS Stylesheet */}
       <style>{`
         :root, [data-theme="light"] {
-          --bg: #F4F1EA;
-          --card-bg: #FDFCFA;
-          --text: #1A1A1A;
-          --text-muted: #6B6658;
-          --border: #1A1A1A;
-          --shadow: #1A1A1A;
-          --input-bg: #FFFFFF;
-          --btn-bg: #E8E4D8;
-          --btn-hover: #D8D2BE;
-          --kanji: #FF4B1F;
-          --bunpou: #0047AB;
-          --vocab: #1A8A3E;
-          --listening: #B8860B;
+          --bg: #F8F7F4;
+          --card-bg: #FFFFFF;
+          --text: #111111;
+          --text-muted: #737373;
+          --border: #E5E5E5;
+          --cell-empty: #EFEFEA;
+          --btn-bg: #F2F1EC;
+          --accent: #FF3B30;
+          --kanji: #E03E1A;
+          --bunpou: #0055D4;
+          --vocab: #15803D;
+          --listening: #B45309;
         }
 
         [data-theme="dark"] {
-          --bg: #121212;
-          --card-bg: #1C1C1C;
-          --text: #F0EFEA;
-          --text-muted: #9E998B;
-          --border: #383838;
-          --shadow: #000000;
-          --input-bg: #262626;
-          --btn-bg: #2A2A2A;
-          --btn-hover: #383838;
-          --kanji: #FF5A30;
-          --bunpou: #2672EC;
-          --vocab: #28B052;
-          --listening: #D4A017;
+          --bg: #0F0F0F;
+          --card-bg: #181818;
+          --text: #F5F5F5;
+          --text-muted: #8E8E8E;
+          --border: #262626;
+          --cell-empty: #222222;
+          --btn-bg: #222222;
+          --accent: #FF453A;
+          --kanji: #FF5A36;
+          --bunpou: #2F80ED;
+          --vocab: #22C55E;
+          --listening: #F59E0B;
+        }
+
+        html, body {
+          margin: 0;
+          padding: 0;
+          overflow-x: hidden;
+          background-color: var(--bg);
+          font-family: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+          -webkit-font-smoothing: antialiased;
         }
 
         * { box-sizing: border-box; }
-        body { margin: 0; }
         input[type=number]::-webkit-inner-spin-button,
         input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-        button, label { touch-action: manipulation; user-select: none; }
 
-        /* Bento Grid: 2 Column for Tablets & Desktop */
-        .bento-container {
-          display: grid;
-          grid-template-columns: 44% 56%;
-          gap: 20px;
-          align-items: start;
+        .swiss-root {
+          min-height: 100dvh;
+          width: 100%;
+          overflow-x: hidden;
+          padding: 24px 16px 40px;
+          background-color: var(--bg);
+          color: var(--text);
+          box-sizing: border-box;
         }
 
-        /* Responsive Mobile Layout (< 768px) */
-        @media (max-width: 768px) {
-          .bento-container {
-            grid-template-columns: 1fr;
-            gap: 16px;
-          }
-          .mobile-tab-bar {
-            display: block !important;
-          }
-          .mobile-hidden {
-            display: none !important;
-          }
+        .swiss-shell {
+          max-width: 680px;
+          margin: 0 auto;
+          width: 100%;
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          box-sizing: border-box;
+        }
+
+        /* Header */
+        .swiss-header {
+          display: flex;
+          justifyContent: space-between;
+          align-items: center;
+          width: 100%;
+          padding-bottom: 12px;
+          border-bottom: 1px solid var(--border);
+        }
+        .brand-group {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+        }
+        .brand-title {
+          font-size: 24px;
+          font-weight: 800;
+          letter-spacing: -0.02em;
+        }
+        .brand-status {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 10px;
+          color: var(--text-muted);
+        }
+        .control-group {
+          display: flex;
+          gap: 6px;
+        }
+        .swiss-icon-btn {
+          width: 34px;
+          height: 34px;
+          border: 1px solid var(--border);
+          background: var(--card-bg);
+          color: var(--text);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          border-radius: 1px;
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 10px;
+          font-weight: 700;
+        }
+
+        /* Metrics Bar (3 Equal Columns) */
+        .swiss-metrics {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          border: 1px solid var(--border);
+          background: var(--card-bg);
+          width: 100%;
+        }
+        .metric-col {
+          padding: 12px 8px;
+          text-align: center;
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+        }
+        .metric-col:not(:last-child) {
+          border-right: 1px solid var(--border);
+        }
+        .metric-label {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9px;
+          color: var(--text-muted);
+          letter-spacing: 0.08em;
+          font-weight: 600;
+        }
+        .metric-val {
+          font-size: 24px;
+          font-weight: 800;
+          font-variant-numeric: tabular-nums;
+          line-height: 1.1;
+        }
+
+        /* Date Navigation */
+        .swiss-date-nav {
+          display: flex;
+          justifyContent: space-between;
+          align-items: center;
+          border: 1px solid var(--border);
+          background: var(--card-bg);
+          height: 42px;
+          width: 100%;
+          padding: 0 4px;
+        }
+        .nav-btn {
+          width: 34px;
+          height: 34px;
+          border: none;
+          background: transparent;
+          color: var(--text);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+        }
+        .date-center {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .date-text {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 12px;
+          font-weight: 700;
+        }
+        .today-chip {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 9px;
+          font-weight: 700;
+          background: var(--text);
+          color: var(--bg);
+          border: none;
+          padding: 2px 6px;
+          cursor: pointer;
+          border-radius: 1px;
+        }
+
+        /* Tabs */
+        .swiss-tabs {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          border: 1px solid var(--border);
+          background: var(--card-bg);
+          padding: 2px;
+          width: 100%;
+        }
+        .tab-btn {
+          border: none;
+          background: transparent;
+          color: var(--text-muted);
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11px;
+          font-weight: 700;
+          padding: 8px 0;
+          cursor: pointer;
+          transition: background-color 0.15s ease, color 0.15s ease;
+        }
+        .tab-btn.active {
+          background: var(--text);
+          color: var(--bg);
+        }
+
+        /* Stacks */
+        .habit-stack, .stats-stack {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          width: 100%;
+        }
+
+        /* Category Row */
+        .category-row {
+          border: 1px solid var(--border);
+          background: var(--card-bg);
+          padding: 14px;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          width: 100%;
+        }
+        .cat-top {
+          display: flex;
+          justifyContent: space-between;
+          align-items: center;
+          width: 100%;
+        }
+        .cat-meta {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+        }
+        .cat-num {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11px;
+          color: var(--text-muted);
+          font-weight: 600;
+        }
+        .cat-name {
+          font-size: 16px;
+          font-weight: 700;
+        }
+        .cat-ratio {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 12px;
+          color: var(--text-muted);
+        }
+        .cat-stepper {
+          display: flex;
+          align-items: center;
+          border: 1px solid var(--border);
+          height: 34px;
+        }
+        .stepper-btn {
+          width: 32px;
+          height: 100%;
+          border: none;
+          background: var(--btn-bg);
+          color: var(--text);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+        }
+        .stepper-input {
+          width: 44px;
+          height: 100%;
+          border: none;
+          text-align: center;
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 14px;
+          font-weight: 700;
+          background: transparent;
+          color: var(--text);
+          padding: 0;
+          outline: none;
+        }
+        .cat-progress-track {
+          height: 3px;
+          background: var(--cell-empty);
+          width: 100%;
+          overflow: hidden;
+        }
+        .cat-progress-fill {
+          height: 100%;
+          transition: width 0.25s ease;
+        }
+        .cat-actions-grid {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 6px;
+          width: 100%;
+        }
+        .action-chip {
+          height: 32px;
+          border: 1px solid var(--border);
+          background: var(--btn-bg);
+          color: var(--text);
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11px;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          cursor: pointer;
+          border-radius: 1px;
+        }
+        .action-chip.target {
+          background: var(--text);
+          color: var(--bg);
+        }
+        .action-chip.done {
+          background: var(--vocab);
+          color: #fff;
+          border-color: var(--vocab);
+        }
+
+        /* Data Bar (Equal 3-Column Grid) */
+        .data-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 8px;
+          width: 100%;
+        }
+        .data-btn {
+          height: 36px;
+          border: 1px solid var(--border);
+          background: var(--card-bg);
+          color: var(--text);
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11px;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          cursor: pointer;
+        }
+
+        /* Modal */
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0, 0, 0, 0.6);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 16px;
+          z-index: 1000;
+        }
+        .modal-dialog {
+          background: var(--card-bg);
+          border: 1px solid var(--border);
+          padding: 20px;
+          max-width: 360px;
+          width: 100%;
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+        .modal-header {
+          display: flex;
+          justifyContent: space-between;
+          align-items: center;
+        }
+        .modal-title {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 12px;
+          font-weight: 700;
+        }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 18px;
+          cursor: pointer;
+          color: var(--text);
+        }
+        .modal-body {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+        .modal-row {
+          display: flex;
+          justifyContent: space-between;
+          align-items: center;
+          font-size: 14px;
+        }
+        .modal-input {
+          width: 60px;
+          padding: 6px;
+          border: 1px solid var(--border);
+          background: transparent;
+          color: var(--text);
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 14px;
+          text-align: center;
+        }
+        .modal-save-btn {
+          padding: 10px;
+          background: var(--text);
+          color: var(--bg);
+          border: none;
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
         }
       `}</style>
     </div>
   );
 }
-
-const stepperBtnStyle = {
-  width: 44,
-  height: '100%',
-  border: 'none',
-  background: 'var(--btn-bg)',
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  color: 'var(--text)',
-};
-
-const chipBtnStyle = {
-  fontFamily: "'IBM Plex Mono', monospace",
-  fontSize: '12px',
-  fontWeight: 700,
-  border: '2px solid var(--border)',
-  background: 'var(--btn-bg)',
-  color: 'var(--text)',
-  padding: '6px 10px',
-  cursor: 'pointer',
-  borderRadius: '2px',
-};
-
-const actionBtnStyle = {
-  fontFamily: "'IBM Plex Mono', monospace",
-  fontSize: '12px',
-  border: '2px solid var(--border)',
-  background: 'var(--text)',
-  color: 'var(--bg)',
-  padding: '10px 14px',
-  cursor: 'pointer',
-  fontWeight: 700,
-  minHeight: '44px',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '6px',
-};

@@ -1,48 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { computeScore, daysAgoISO, todayISO, formatDateIndo } from '../utils/algorithm.js';
-
-function HeatCell({ date, score, isToday, isSelected, onClick, onHover }) {
-  let bg = 'var(--btn-bg)';
-  let border = '2px solid var(--border)';
-
-  if (score > 0) {
-    if (score < 20) bg = '#D8D2BE';
-    else if (score < 50) bg = '#F5C99E';
-    else if (score < 90) bg = '#FF8F5A';
-    else bg = '#FF4B1F';
-  }
-
-  if (isSelected) {
-    border = '2.5px solid var(--bunpou)';
-  } else if (isToday) {
-    border = '2.5px solid var(--vocab)';
-  }
-
-  return (
-    <div
-      onClick={onClick}
-      onMouseEnter={(e) => onHover(date, score, e)}
-      onMouseLeave={() => onHover(null)}
-      style={{
-        width: '18px',
-        height: '18px',
-        backgroundColor: bg,
-        border,
-        cursor: 'pointer',
-        position: 'relative',
-        transition: 'transform 0.08s ease',
-        boxSizing: 'border-box',
-        borderRadius: '2px',
-        transform: isSelected ? 'scale(1.15)' : 'scale(1)',
-        zIndex: isSelected ? 2 : 1,
-      }}
-    />
-  );
-}
+import { computeScore, daysAgoISO, todayISO } from '../utils/algorithm.js';
 
 export default function Heatmap({ entries = {}, onSelectDate, selectedDate }) {
-  const [hoveredInfo, setHoveredInfo] = useState(null);
+  const [hovered, setHovered] = useState(null);
 
+  // 16 weeks = 112 days
   const days = useMemo(() => {
     const arr = [];
     for (let i = 111; i >= 0; i--) {
@@ -60,125 +22,136 @@ export default function Heatmap({ entries = {}, onSelectDate, selectedDate }) {
     return arr;
   }, [days]);
 
-  // Derive month labels for week columns
-  const monthLabels = useMemo(() => {
-    const labels = [];
+  // Month label positions (0 to 15 columns)
+  const monthMarkers = useMemo(() => {
+    const markers = [];
     let lastMonth = '';
+    const monthNames = ['JAN', 'FEB', 'MAR', 'APR', 'MEI', 'JUN', 'JUL', 'AGU', 'SEP', 'OKT', 'NOV', 'DES'];
     weeks.forEach((week, wi) => {
-      const firstDay = week[0]?.date;
-      if (firstDay) {
-        const m = firstDay.slice(5, 7);
+      const d = week[0]?.date;
+      if (d) {
+        const m = d.slice(5, 7);
         if (m !== lastMonth) {
-          const monthNames = {
-            '01': 'JAN', '02': 'FEB', '03': 'MAR', '04': 'APR', '05': 'MEI', '06': 'JUN',
-            '07': 'JUL', '08': 'AGU', '09': 'SEP', '10': 'OKT', '11': 'NOV', '12': 'DES',
-          };
-          labels.push({ index: wi, label: monthNames[m] || '' });
+          const idx = parseInt(m, 10) - 1;
+          markers.push({ col: wi, name: monthNames[idx] || '' });
           lastMonth = m;
         }
       }
     });
-    return labels;
+    return markers;
   }, [weeks]);
 
-  const handleHover = (date, score, event) => {
-    if (!date) {
-      setHoveredInfo(null);
-      return;
-    }
-    setHoveredInfo({ date, score });
+  // SVG coordinate calculations
+  // Total width: 340, height: 72
+  // Axis label width: 22, Left margin: 24
+  // 16 cols -> colWidth: 16px, gap: 3.5px -> (16 * 19.5 = 312px)
+  const cellW = 15;
+  const cellH = 7;
+  const gap = 3.5;
+  const startX = 24;
+  const startY = 14;
+
+  const getCellColor = (score) => {
+    if (!score || score <= 0) return 'var(--cell-empty)';
+    if (score < 25) return '#D8D2BE';
+    if (score < 60) return '#F5C99E';
+    if (score < 100) return '#FF8F5A';
+    return '#FF4B1F';
   };
 
   return (
-    <div style={{ border: '3px solid var(--border)', padding: '16px', background: 'var(--card-bg)', position: 'relative' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.05em' }}>
-          HEATMAP KONSISTENSI 16 MINGGU
-        </div>
-        {hoveredInfo ? (
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', color: 'var(--text)', fontWeight: 700 }}>
-            {hoveredInfo.date}: <span style={{ color: 'var(--kanji)' }}>{hoveredInfo.score} poin</span>
-          </div>
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        padding: '16px',
+        background: 'var(--card-bg)',
+        boxSizing: 'border-box',
+        width: '100%',
+      }}
+    >
+      {/* Header: Title & Live Hover Details (No filler text) */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '10px',
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontSize: '11px',
+        }}
+      >
+        <span style={{ color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.08em' }}>
+          HEATMAP • 16 MINGGU
+        </span>
+        {hovered ? (
+          <span style={{ fontWeight: 700, color: 'var(--text)' }}>
+            {hovered.date}: <span style={{ color: 'var(--kanji)' }}>{hovered.score} pts</span>
+          </span>
         ) : (
-          <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: '10px', color: 'var(--text-muted)' }}>
-            sentuh kotak untuk memilih tanggal
-          </div>
+          <span style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
+            {selectedDate}: {computeScore(entries[selectedDate])} pts
+          </span>
         )}
       </div>
 
-      {/* Month Markers */}
-      <div style={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: '6px' }}>
-        <div style={{ minWidth: 'max-content' }}>
-          <div style={{ display: 'flex', position: 'relative', height: '16px', marginBottom: '4px', paddingLeft: '28px' }}>
-            {monthLabels.map((m, idx) => (
-              <span
-                key={idx}
-                style={{
-                  position: 'absolute',
-                  left: `${28 + m.index * 22}px`,
-                  fontFamily: "'IBM Plex Mono', monospace",
-                  fontSize: '10px',
-                  color: 'var(--text-muted)',
-                  fontWeight: 600,
-                }}
+      {/* 100% Fluid SVG Matrix — Zero Horizontal Scroll */}
+      <svg
+        viewBox="0 0 340 76"
+        style={{ width: '100%', height: 'auto', display: 'block' }}
+        preserveAspectRatio="xMidYMid meet"
+      >
+        {/* Month Labels */}
+        {monthMarkers.map((m, idx) => (
+          <text
+            key={idx}
+            x={startX + m.col * (cellW + gap)}
+            y="9"
+            fontFamily="'IBM Plex Mono', monospace"
+            fontSize="8"
+            fontWeight="600"
+            fill="var(--text-muted)"
+          >
+            {m.name}
+          </text>
+        ))}
+
+        {/* Day of week labels */}
+        <text x="2" y={startY + 1 * (cellH + gap) + 6} fontFamily="'IBM Plex Mono', monospace" fontSize="7" fill="var(--text-muted)">Sen</text>
+        <text x="2" y={startY + 3 * (cellH + gap) + 6} fontFamily="'IBM Plex Mono', monospace" fontSize="7" fill="var(--text-muted)">Rab</text>
+        <text x="2" y={startY + 5 * (cellH + gap) + 6} fontFamily="'IBM Plex Mono', monospace" fontSize="7" fill="var(--text-muted)">Jum</text>
+
+        {/* 16x7 Cells */}
+        {weeks.map((week, wi) => {
+          const colX = startX + wi * (cellW + gap);
+          return week.map((d, di) => {
+            const rowY = startY + di * (cellH + gap);
+            const isToday = d.date === todayISO();
+            const isSelected = d.date === selectedDate;
+            const fillColor = getCellColor(d.score);
+
+            return (
+              <g
+                key={d.date}
+                onClick={() => onSelectDate && onSelectDate(d.date)}
+                onMouseEnter={() => setHovered({ date: d.date, score: d.score })}
+                onMouseLeave={() => setHovered(null)}
+                style={{ cursor: 'pointer' }}
               >
-                {m.label}
-              </span>
-            ))}
-          </div>
-
-          {/* Grid with Day of Week Axis */}
-          <div style={{ display: 'flex', gap: '6px' }}>
-            <div style={{ display: 'grid', gridTemplateRows: 'repeat(7, 18px)', gap: '4px', fontFamily: "'IBM Plex Mono', monospace", fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right', paddingRight: '4px' }}>
-              <span>Min</span>
-              <span>Sen</span>
-              <span>Sel</span>
-              <span>Rab</span>
-              <span>Kam</span>
-              <span>Jum</span>
-              <span>Sab</span>
-            </div>
-
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: `repeat(${weeks.length}, 18px)`,
-                gap: '4px',
-              }}
-            >
-              {weeks.map((week, wi) => (
-                <div key={wi} style={{ display: 'grid', gridTemplateRows: 'repeat(7, 18px)', gap: '4px' }}>
-                  {week.map((d) => (
-                    <HeatCell
-                      key={d.date}
-                      date={d.date}
-                      score={d.score}
-                      isToday={d.date === todayISO()}
-                      isSelected={d.date === selectedDate}
-                      onClick={() => onSelectDate(d.date)}
-                      onHover={handleHover}
-                    />
-                  ))}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Legend */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '12px', flexWrap: 'wrap', gap: '8px', fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: 'var(--text-muted)' }}>SEPI</span>
-          {['var(--btn-bg)', '#D8D2BE', '#F5C99E', '#FF8F5A', '#FF4B1F'].map((c, i) => (
-            <div key={i} style={{ width: 14, height: 14, backgroundColor: c, border: '1.5px solid var(--border)', borderRadius: '1px' }} />
-          ))}
-          <span style={{ color: 'var(--text-muted)' }}>GACOR</span>
-        </div>
-        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-          <span style={{ color: 'var(--vocab)', fontWeight: 700 }}>■</span> Hari Ini &nbsp;|&nbsp; <span style={{ color: 'var(--bunpou)', fontWeight: 700 }}>■</span> Dipilih
-        </div>
-      </div>
+                <rect
+                  x={colX}
+                  y={rowY}
+                  width={cellW}
+                  height={cellH}
+                  rx="1"
+                  fill={fillColor}
+                  stroke={isSelected ? 'var(--bunpou)' : isToday ? 'var(--vocab)' : 'var(--border)'}
+                  strokeWidth={isSelected ? '1.5' : isToday ? '1.2' : '0.5'}
+                />
+              </g>
+            );
+          });
+        })}
+      </svg>
     </div>
   );
 }
