@@ -167,7 +167,7 @@ export default function Statistics({ entries = {}, selectedDate, onSelectDate })
               <div key={cat.id}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: "'IBM Plex Mono', monospace", fontSize: '11px', marginBottom: '4px' }}>
                   <span style={{ fontWeight: 600 }}>{cat.num} {cat.label}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>{count} ({pct}%)</span>
+                  <span style={{ color: 'var(--text-muted)' }}>{count} min ({pct}%)</span>
                 </div>
                 <div style={{ height: '4px', background: 'var(--cell-empty)', width: '100%', overflow: 'hidden' }}>
                   <div style={{ width: `${pct}%`, height: '100%', backgroundColor: cat.color }} />

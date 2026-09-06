@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense, lazy } from 'react';
 import {
   Flame, Trophy, Zap, Sliders, Volume2, VolumeX, Sun, Moon,
-  ChevronLeft, ChevronRight, Plus, Minus, Download, Upload, BarChart3, Check
+  ChevronLeft, ChevronRight, Plus, Minus, Download, Upload, BarChart3, Check,
+  Play, Square, Clock, Timer
 } from 'lucide-react';
 
 import {
@@ -18,6 +19,7 @@ import { playClickSound, playGoalChime, triggerHaptic } from './utils/feedback.j
 import { animatePress, createCelebrationBurst } from './utils/motion.js';
 
 import StatCounter from './components/StatCounter.jsx';
+import { useTimer } from './utils/useTimer.js';
 
 // Lazy-loaded visual modules for optimal hydration
 const Heatmap = lazy(() => import('./components/Heatmap.jsx'));
@@ -26,7 +28,7 @@ const Statistics = lazy(() => import('./components/Statistics.jsx'));
 export default function App() {
   const [loaded, setLoaded] = useState(false);
   const [entries, setEntries] = useState({});
-  const [targets, setTargets] = useState({ kanji: 15, bunpou: 10, vocab: 30, listening: 25 });
+  const [targets, setTargets] = useState({ kanji: 30, bunpou: 25, vocab: 30, listening: 25 });
   const [theme, setTheme] = useState('light');
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [selectedDate, setSelectedDate] = useState(todayISO());
@@ -76,6 +78,24 @@ export default function App() {
   const momentum = useMemo(() => computeMomentum(entries), [entries]);
   const tier = useMemo(() => getMasteryTier(momentum), [momentum]);
   const currentEntry = entries[selectedDate] || {};
+
+  const handleTimerComplete = useCallback((catId, minutes) => {
+    if (minutes <= 0) return;
+    playGoalChime(soundEnabled);
+    triggerHaptic('goal');
+    
+    const nextEntries = {
+      ...entries,
+      [todayISO()]: {
+        ...entries[todayISO()],
+        [catId]: (entries[todayISO()]?.[catId] || 0) + minutes,
+      },
+    };
+    setEntries(nextEntries);
+    if (saveQueueRef.current) saveQueueRef.current(nextEntries);
+  }, [entries, soundEnabled]);
+
+  const timer = useTimer(handleTimerComplete);
 
   // Handlers
   const updateCategory = useCallback((catId, val, btnElem) => {
@@ -271,6 +291,8 @@ export default function App() {
               const target = targets[cat.id] || cat.defaultTarget;
               const pct = Math.min(100, Math.round((val / target) * 100));
               const isDone = val >= target;
+              const isTimerActive = timer.activeCategory === cat.id;
+              const isAnyTimerRunning = timer.isRunning;
 
               return (
                 <div key={cat.id} className="category-row">
@@ -279,31 +301,10 @@ export default function App() {
                     <div className="cat-meta">
                       <span className="cat-num">{cat.num}</span>
                       <span className="cat-name">{cat.label}</span>
-                      <span className="cat-ratio">{val}/{target}</span>
                     </div>
-
-                    <div className="cat-stepper">
-                      <button
-                        onClick={(e) => updateCategory(cat.id, val - 5, e.currentTarget)}
-                        className="stepper-btn"
-                        aria-label={`Kurang 5 ${cat.label}`}
-                      >
-                        <Minus size={14} />
-                      </button>
-                      <input
-                        type="number"
-                        value={val}
-                        onChange={(e) => updateCategory(cat.id, e.target.value)}
-                        className="stepper-input"
-                      />
-                      <button
-                        onClick={(e) => updateCategory(cat.id, val + 5, e.currentTarget)}
-                        className="stepper-btn"
-                        aria-label={`Tambah 5 ${cat.label}`}
-                      >
-                        <Plus size={14} />
-                      </button>
-                    </div>
+                    <span className="cat-ratio">
+                      {val}/{target} <span className="cat-unit">min</span>
+                    </span>
                   </div>
 
                   {/* Middle: Hairline Progress */}
@@ -314,23 +315,65 @@ export default function App() {
                     />
                   </div>
 
-                  {/* Bottom: 4 Action Buttons in 100% Equal Grid */}
-                  <div className="cat-actions-grid">
-                    {[1, 5, 10].map((amt) => (
-                      <button
-                        key={amt}
-                        onClick={(e) => updateCategory(cat.id, val + amt, e.currentTarget)}
-                        className="action-chip"
-                      >
-                        +{amt}
-                      </button>
-                    ))}
-                    <button
-                      onClick={(e) => updateCategory(cat.id, target, e.currentTarget)}
-                      className={`action-chip ${isDone ? 'done' : 'target'}`}
-                    >
-                      {isDone ? <Check size={12} /> : '🎯'} {target}
-                    </button>
+                  {/* Controls: Timer + Manual input */}
+                  <div className="cat-controls">
+                    {isTimerActive ? (
+                      // Active timer state — full-width timer display
+                      <div className="timer-active">
+                        <div className="timer-indicator">
+                          <span className="timer-dot" />
+                          <span className="timer-label">REC</span>
+                        </div>
+                        <span className="timer-display">{timer.elapsedFormatted}</span>
+                        <button
+                          onClick={() => timer.stop()}
+                          className="timer-stop-btn"
+                        >
+                          <Square size={12} /> STOP
+                        </button>
+                      </div>
+                    ) : (
+                      // Default state — timer start + manual stepper
+                      <>
+                        <button
+                          onClick={() => timer.start(cat.id)}
+                          className="timer-start-btn"
+                          disabled={isAnyTimerRunning}
+                          title={isAnyTimerRunning ? 'Hentikan timer aktif dulu' : `Mulai timer ${cat.label}`}
+                        >
+                          <Play size={13} />
+                          <span>START</span>
+                        </button>
+
+                        <div className="cat-stepper">
+                          <button
+                            onClick={(e) => updateCategory(cat.id, val - 5, e.currentTarget)}
+                            className="stepper-btn"
+                          >
+                            <Minus size={14} />
+                          </button>
+                          <input
+                            type="number"
+                            value={val}
+                            onChange={(e) => updateCategory(cat.id, e.target.value)}
+                            className="stepper-input"
+                          />
+                          <button
+                            onClick={(e) => updateCategory(cat.id, val + 5, e.currentTarget)}
+                            className="stepper-btn"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+
+                        <button
+                          onClick={(e) => updateCategory(cat.id, target, e.currentTarget)}
+                          className={`target-chip ${isDone ? 'done' : ''}`}
+                        >
+                          {isDone ? <Check size={12} /> : '🎯'}
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               );
@@ -381,7 +424,7 @@ export default function App() {
           <div className="modal-overlay">
             <div className="modal-dialog">
               <div className="modal-header">
-                <span className="modal-title">TARGET HARIAN</span>
+                <span className="modal-title">TARGET HARIAN (MENIT)</span>
                 <button onClick={() => setShowTargetModal(false)} className="modal-close">✕</button>
               </div>
 
@@ -389,16 +432,19 @@ export default function App() {
                 {CATEGORIES.map((c) => (
                   <div key={c.id} className="modal-row">
                     <span style={{ fontWeight: 600 }}>{c.label}</span>
-                    <input
-                      type="number"
-                      value={targets[c.id] || c.defaultTarget}
-                      onChange={(e) => {
-                        const next = { ...targets, [c.id]: Math.max(1, parseInt(e.target.value, 10) || 1) };
-                        setTargets(next);
-                        saveTargets(next);
-                      }}
-                      className="modal-input"
-                    />
+                    <div className="modal-input-group">
+                      <input
+                        type="number"
+                        value={targets[c.id] || c.defaultTarget}
+                        onChange={(e) => {
+                          const next = { ...targets, [c.id]: Math.max(1, parseInt(e.target.value, 10) || 1) };
+                          setTargets(next);
+                          saveTargets(next);
+                        }}
+                        className="modal-input"
+                      />
+                      <span className="modal-input-suffix">min</span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -633,11 +679,15 @@ export default function App() {
         .category-row {
           border: 1px solid var(--border);
           background: var(--card-bg);
-          padding: 14px;
+          padding: 16px;
           display: flex;
           flex-direction: column;
-          gap: 10px;
+          gap: 12px;
           width: 100%;
+          transition: border-color 0.2s;
+        }
+        .category-row:has(.timer-active) {
+          border-color: var(--kanji);
         }
         .cat-top {
           display: flex;
@@ -665,11 +715,129 @@ export default function App() {
           font-size: 12px;
           color: var(--text-muted);
         }
+        .cat-unit {
+          font-size: 10px;
+          color: var(--text-muted);
+        }
+
+        /* Progress track slightly thicker */
+        .cat-progress-track {
+          height: 4px;
+          background: var(--cell-empty);
+          width: 100%;
+          overflow: hidden;
+          border-radius: 2px;
+        }
+        .cat-progress-fill {
+          height: 100%;
+          transition: width 0.3s ease;
+          border-radius: 2px;
+        }
+
+        /* Timer Controls Row */
+        .cat-controls {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: 100%;
+        }
+
+        .timer-start-btn {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          height: 36px;
+          padding: 0 14px;
+          border: 2px solid var(--text);
+          background: transparent;
+          color: var(--text);
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: background 0.15s, color 0.15s;
+          flex-shrink: 0;
+        }
+        .timer-start-btn:hover:not(:disabled) {
+          background: var(--text);
+          color: var(--bg);
+        }
+        .timer-start-btn:disabled {
+          opacity: 0.3;
+          cursor: not-allowed;
+        }
+
+        /* Active Timer Display */
+        .timer-active {
+          display: flex;
+          align-items: center;
+          width: 100%;
+          height: 42px;
+          padding: 0 12px;
+          border: 2px solid var(--kanji);
+          background: color-mix(in srgb, var(--kanji) 8%, transparent);
+          gap: 12px;
+        }
+
+        .timer-indicator {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .timer-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 50%;
+          background: var(--kanji);
+          animation: pulse-dot 1.2s ease-in-out infinite;
+        }
+
+        @keyframes pulse-dot {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.4; transform: scale(0.8); }
+        }
+
+        .timer-label {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 10px;
+          font-weight: 700;
+          color: var(--kanji);
+          letter-spacing: 0.1em;
+        }
+
+        .timer-display {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 20px;
+          font-weight: 800;
+          font-variant-numeric: tabular-nums;
+          flex: 1;
+          text-align: center;
+        }
+
+        .timer-stop-btn {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          height: 30px;
+          padding: 0 12px;
+          background: var(--kanji);
+          color: #fff;
+          border: none;
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+
+        /* Stepper refined */
         .cat-stepper {
           display: flex;
           align-items: center;
           border: 1px solid var(--border);
-          height: 34px;
+          height: 36px;
+          flex: 1;
+          min-width: 0;
         }
         .stepper-btn {
           width: 32px;
@@ -683,7 +851,9 @@ export default function App() {
           cursor: pointer;
         }
         .stepper-input {
-          width: 44px;
+          width: 100%;
+          min-width: 36px;
+          flex: 1;
           height: 100%;
           border: none;
           text-align: center;
@@ -695,42 +865,21 @@ export default function App() {
           padding: 0;
           outline: none;
         }
-        .cat-progress-track {
-          height: 3px;
-          background: var(--cell-empty);
-          width: 100%;
-          overflow: hidden;
-        }
-        .cat-progress-fill {
-          height: 100%;
-          transition: width 0.25s ease;
-        }
-        .cat-actions-grid {
-          display: grid;
-          grid-template-columns: repeat(4, 1fr);
-          gap: 6px;
-          width: 100%;
-        }
-        .action-chip {
-          height: 32px;
+
+        /* Target chip (replaces old action grid) */
+        .target-chip {
+          width: 36px;
+          height: 36px;
           border: 1px solid var(--border);
           background: var(--btn-bg);
-          color: var(--text);
-          font-family: 'IBM Plex Mono', monospace;
-          font-size: 11px;
-          font-weight: 700;
           display: flex;
           align-items: center;
           justify-content: center;
-          gap: 4px;
           cursor: pointer;
-          border-radius: 1px;
+          font-size: 14px;
+          flex-shrink: 0;
         }
-        .action-chip.target {
-          background: var(--text);
-          color: var(--bg);
-        }
-        .action-chip.done {
+        .target-chip.done {
           background: var(--vocab);
           color: #fff;
           border-color: var(--vocab);
@@ -819,6 +968,16 @@ export default function App() {
           font-family: 'IBM Plex Mono', monospace;
           font-size: 14px;
           text-align: center;
+        }
+        .modal-input-group {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+        .modal-input-suffix {
+          font-family: 'IBM Plex Mono', monospace;
+          font-size: 11px;
+          color: var(--text-muted);
         }
         .modal-save-btn {
           padding: 10px;

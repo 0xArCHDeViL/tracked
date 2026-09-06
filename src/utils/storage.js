@@ -6,8 +6,8 @@ const THEME_KEY = 'tracked_theme';
 const SOUND_KEY = 'tracked_sound';
 
 export const DEFAULT_TARGETS = {
-  kanji: 15,
-  bunpou: 10,
+  kanji: 30,
+  bunpou: 25,
   vocab: 30,
   listening: 25,
 };
@@ -115,6 +115,8 @@ export function createDebouncedSaver(onSuccess, onError, onStartSaving) {
   };
 }
 
+const TIMER_KEY = 'tracked_timer';
+
 export async function saveTargets(targets) {
   return storageAdapter.set(TARGETS_KEY, JSON.stringify(targets));
 }
@@ -125,6 +127,22 @@ export async function saveTheme(theme) {
 
 export async function saveSoundSetting(enabled) {
   return storageAdapter.set(SOUND_KEY, String(enabled));
+}
+
+export async function saveTimerState(timerState) {
+  return storageAdapter.set(TIMER_KEY, JSON.stringify(timerState));
+}
+
+export async function loadTimerState() {
+  try {
+    const raw = await storageAdapter.get(TIMER_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return null;
+}
+
+export async function clearTimerState() {
+  return storageAdapter.set(TIMER_KEY, 'null');
 }
 
 export async function exportJSON(entries) {
@@ -157,7 +175,7 @@ export async function exportJSON(entries) {
 export function exportCSV(entries) {
   const dates = Object.keys(entries).sort();
   const rows = [
-    ['Date', 'Kanji', 'Bunpou', 'Vocab', 'Listening', 'Score'].join(','),
+    ['Date', 'Kanji (min)', 'Bunpou (min)', 'Vocab (min)', 'Listening (min)', 'Score'].join(','),
   ];
 
   dates.forEach((date) => {

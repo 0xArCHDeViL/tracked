@@ -53,9 +53,9 @@ export default function Heatmap({ entries = {}, onSelectDate, selectedDate }) {
 
   const getCellColor = (score) => {
     if (!score || score <= 0) return 'var(--cell-empty)';
-    if (score < 25) return '#D8D2BE';
-    if (score < 60) return '#F5C99E';
-    if (score < 100) return '#FF8F5A';
+    if (score < 40) return '#D8D2BE';
+    if (score < 90) return '#F5C99E';
+    if (score < 160) return '#FF8F5A';
     return '#FF4B1F';
   };
 
